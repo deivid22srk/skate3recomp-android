@@ -497,7 +497,10 @@ bool RunRexglueIsoInstallWizardBlocking(rex::ui::WindowedAppContext& app_context
     if (window) {
       window->RequestPaint();
     }
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__ANDROID__)
+    // STUB Android: GTK event pump skipped - no GTK on Android.  The
+    // rexglue-sdk ImGui-based overlay (install_wizard_overlay) does its
+    // own UI redraw via window->RequestPaint() above, so this is safe.
     while (gtk_events_pending()) {
       gtk_main_iteration_do(FALSE);
     }

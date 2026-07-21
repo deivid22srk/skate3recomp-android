@@ -33,6 +33,12 @@
 
 #include <rex/ui/window_win.h>
 #elif defined(__APPLE__)
+#elif defined(__ANDROID__)
+// STUB Android: no GTK on Android.  The title-update installer UI is
+// provided by the rexglue-sdk ImGui-based overlay instead of a native
+// file picker.  PickTitleUpdateFile() returns an empty path on
+// Android - callers treat that as "user cancelled" and surface the
+// overlay-based installer instead.
 #else
 #include <gtk/gtk.h>
 #endif
@@ -584,6 +590,13 @@ std::filesystem::path PickTitleUpdateFile() {
 std::filesystem::path PickTitleUpdateFile() {
   return skate3::PickTitleUpdateFileMacOS();
 }
+#elif defined(__ANDROID__)
+// STUB Android: no native file picker (GTK not available).  Returning
+// an empty path makes the caller fall through to the rexglue-sdk
+// ImGui-based install wizard overlay.
+std::filesystem::path PickTitleUpdateFile() {
+  return {};
+}
 #else
 std::filesystem::path PickTitleUpdateFile() {
   GtkWidget* dialog = gtk_file_chooser_dialog_new(
@@ -857,7 +870,10 @@ bool RunTitleUpdateInstallWizardBlocking(rex::ui::WindowedAppContext& app_contex
     if (window) {
       window->RequestPaint();
     }
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__ANDROID__)
+    // STUB Android: GTK event pump skipped - no GTK on Android.  The
+    // rexglue-sdk ImGui-based overlay does its own UI redraw via
+    // window->RequestPaint() above, so this is safe.
     while (gtk_events_pending()) {
       gtk_main_iteration_do(FALSE);
     }
