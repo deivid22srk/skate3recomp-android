@@ -139,6 +139,16 @@ jobs:
             sed -i 's/-ffp-model=strict/$<$<CXX_COMPILER_ID:Clang>:-ffp-model=strict>$<$<CXX_COMPILER_ID:GNU>:-ffloat-store>/' "$SDK_CMAKE"
             echo "Patched: -ffp-model=strict made conditional on Clang"
           fi
+          # Patch 4: Disable FFmpeg inline asm for GCC host-tools build.
+          # FFmpeg's x86 mathops.h has inline assembly that uses
+          # 'shr' with an immediate operand, which GCC 14 rejects
+          # (it was accepted by older GCC versions).  Setting
+          # HAVE_INLINE_ASM=0 makes FFmpeg use C fallbacks instead.
+          TP_CMAKE="third_party/rexglue-sdk/thirdparty/CMakeLists.txt"
+          if grep -q 'HAVE_AV_CONFIG_H' "$TP_CMAKE"; then
+            sed -i '/HAVE_AV_CONFIG_H/a\\    HAVE_INLINE_ASM=0  # GCC 14 rejects some FFmpeg x86 inline asm' "$TP_CMAKE"
+            echo "Patched: FFmpeg HAVE_INLINE_ASM=0 added"
+          fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
