@@ -132,6 +132,13 @@ jobs:
           if [ -z "$CLANG_ID_LINE" ] && [ -z "$CLANG_VER_LINE" ]; then
             echo "Both Clang checks already disabled or not found"
           fi
+          # Patch 3: Remove -ffp-model=strict (Clang-only flag, GCC
+          # doesn't recognize it).  Replace with -ffloat-store (GCC
+          # equivalent for strict FP consistency) when using GCC.
+          if grep -q '\-ffp-model=strict' "$SDK_CMAKE"; then
+            sed -i 's/-ffp-model=strict/$<$<CXX_COMPILER_ID:Clang>:-ffp-model=strict>$<$<CXX_COMPILER_ID:GNU>:-ffloat-store>/' "$SDK_CMAKE"
+            echo "Patched: -ffp-model=strict made conditional on Clang"
+          fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
