@@ -4,18 +4,28 @@
 # using Android NDK + vcpkg, then packages it with a SDL2-based bootstrap
 # APK produced by Gradle.
 #
-# Game-derived inputs (default.xex, generated codegen sources) cannot live
+# Game-derived inputs (default.xex, optionally EAWebkit.xex) cannot live
 # in this public repository.  The workflow therefore:
-#   1. Attempts the full native build with whatever sources are present.
-#   2. If the native build fails (e.g. because generated/ is missing), falls
-#      back to building a tiny stub libskate3.so that surfaces a friendly
-#      "game files required" message at runtime.
-#   3. Always produces an installable debug APK so the pipeline stays green.
+#   1. Optionally clones GAME_FILES_REPO (containing default.xex and
+#      optionally EAWebkit.xex) if the repo variable is set.
+#   2. Builds the rexglue codegen tool for the host (Linux x86_64).
+#   3. Runs the codegen on default.xex (and EAWebkit.xex if present)
+#      to produce generated/ ahead of the Android cross-build.
+#   4. Cross-compiles libskate3.so for Android arm64-v8a using the
+#      generated/ sources.
+#   5. If anything in steps 1-4 fails (or GAME_FILES_REPO is not set),
+#      falls back to building a tiny stub libskate3.so that surfaces a
+#      friendly "game files required" message at runtime.
+#   6. Always produces an installable debug APK so the pipeline stays green.
 #
-# Provide the optional repository VARIABLE `GAME_FILES_REPO` and SECRET
-# `GAME_FILES_TOKEN` (fine-grained PAT with Contents:read on that single
-# repository) to enable full game codegen.  The private repo must contain
-# default.xex / default.xexp / generated/ at its root.
+# Required configuration for full game codegen:
+#   - Repository VARIABLE  `GAME_FILES_REPO`   - e.g. "deivid22srk/GAME_FILES_REPO"
+#   - Repository SECRET    `GAME_FILES_TOKEN`  - fine-grained PAT with
+#     Contents:read on the GAME_FILES_REPO repository (required only if
+#     GAME_FILES_REPO is private; if it's public, the token is unused).
+# The GAME_FILES_REPO repository must contain at minimum `default.xex`
+# (Skate 3 retail Xbox 360 executable, ~6.6 MB) at its root.
+# Optionally also `EAWebkit.xex` for the in-game web browser module.
 name: Android APK
 
 on:
@@ -54,9 +64,11 @@ jobs:
       - name: Stage game files (if provided)
         if: ${{ vars.GAME_FILES_REPO != '' }}
         run: |
-          # Place a Skate 3 retail dump under ./game and any pre-generated
-          # codegen outputs under ./generated so the CMake step can pick
-          # them up without re-running the host codegen pass.
+          # Place Skate 3 retail binaries under ./game so the codegen step
+          # can find default.xex (and optionally EAWebkit.xex).
+          # If the GAME_FILES_REPO also contains a pre-generated/ directory
+          # (from a previous local codegen run), use it directly and skip
+          # the codegen step below.
           if [ -d game-files/game ]; then
             rsync -a game-files/game/ game/
           fi
@@ -67,12 +79,90 @@ jobs:
             mkdir -p game
             cp game-files/default.xex game/
           fi
+          if [ -f game-files/EAWebkit.xex ]; then
+            mkdir -p game/data/webkit
+            cp game-files/EAWebkit.xex game/data/webkit/
+          fi
           rm -rf game-files
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache rsync
+
+      - name: Build host tools (rexglue codegen, Linux x86_64)
+        if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
+        run: |
+          # Build the rexglue codegen tool for the host (Linux x86_64).
+          # This is needed to produce generated/ from default.xex before
+          # the Android cross-build can compile libskate3.so.
+          #
+          # We use a separate build directory (out/build/host-tools) so
+          # the host build doesn't conflict with the Android cross-build
+          # that comes later.
+          cmake -S . -B out/build/host-tools -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          # Build only the rexglue tool (not the full skate3 target,
+          # which would require generated/ that we're about to produce).
+          cmake --build out/build/host-tools --target rexglue
+          # Verify the tool was produced
+          REXGLUE_BIN=$(find out/build/host-tools -type f -name rexglue -perm /u+x | head -n 1)
+          if [ -z "$REXGLUE_BIN" ]; then
+            echo "::error::rexglue host tool was not produced"
+            exit 1
+          fi
+          echo "REXGLUE_BIN=$GITHUB_WORKSPACE/$REXGLUE_BIN" >> "$GITHUB_ENV"
+          echo "Found rexglue at: $REXGLUE_BIN"
+
+      - name: Run codegen (generate-skate3)
+        if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
+        run: |
+          # Run the rexglue codegen on default.xex to produce
+          # generated/skate3_*.cpp and generated/skate3_init.h.
+          # This is the equivalent of 'cmake --build out/build/host-tools --target generate-skate3'
+          # but invoked directly via the rexglue CLI so we can capture
+          # the output more easily.
+          if [ ! -f game/default.xex ]; then
+            echo "::error::game/default.xex not found - cannot run codegen"
+            exit 1
+          fi
+          # The codegen target reads manifests/skate3.toml which is
+          # generated by the host-tools configure step above.
+          cmake --build out/build/host-tools --target generate-skate3 --verbose
+          # Verify codegen output
+          if [ ! -f generated/sources.cmake ]; then
+            echo "::error::codegen did not produce generated/sources.cmake"
+            find generated -type f 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "Codegen output (skate3):"
+          ls -la generated/ | head -20
+          echo "Total generated files:"
+          find generated -type f | wc -l
+
+      - name: Run codegen (generate-eawebkit, if EAWebkit.xex is present)
+        if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/eawebkit/sources.cmake') && hashFiles('game/data/webkit/EAWebkit.xex') }}
+        run: |
+          # Run the rexglue codegen on EAWebkit.xex to produce
+          # generated/eawebkit/*.cpp.  This is optional - the main
+          # skate3 build does not require eawebkit to compile, but
+          # including it enables the in-game web browser module.
+          echo "Found EAWebkit.xex - running eawebkit codegen"
+          cmake --build out/build/host-tools --target generate-eawebkit --verbose || {
+            echo "::warning::eawebkit codegen failed - continuing without it"
+            echo "EAWebkit codegen failure is non-fatal; libskate3.so will"
+            echo "still build, just without the EAWebkit module."
+          }
+          if [ -f generated/eawebkit/sources.cmake ]; then
+            echo "eawebkit codegen output:"
+            ls -la generated/eawebkit/ | head -10
+          else
+            echo "eawebkit codegen did not produce sources.cmake (skipped)"
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
