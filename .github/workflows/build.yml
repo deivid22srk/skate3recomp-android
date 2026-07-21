@@ -88,7 +88,18 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build ccache rsync
+          # ninja-build, ccache, rsync: general build tools
+          # libgtk-3-dev, libx11-xcb-dev: required by rexglue-sdk's
+          #   desktop UI backend (src/ui/CMakeLists.txt:159 does
+          #   pkg_check_modules(GTK3 REQUIRED gtk+-3.0) and
+          #   pkg_check_modules(X11_XCB REQUIRED x11-xcb)).
+          #   These are needed for the host-tools build (which
+          #   configures the full project for Linux x86_64 to compile
+          #   the rexglue codegen tool).  The Android cross-build
+          #   doesn't need them because our patch script makes GTK3
+          #   conditional on NOT ANDROID.
+          sudo apt-get install -y ninja-build ccache rsync \
+            libgtk-3-dev libx11-xcb-dev
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
