@@ -482,4 +482,141 @@ else:
     print(f"::warning::{p} ARM64 FFmpeg ASM block not found")
 PY
 
+# 12. Fallback: disable FFmpeg AArch64 NEON assembly on Android.
+#
+# Patch #11 attempted to pass -fPIC to ASM sources, but FFmpeg's
+# hand-written NEON .S files use adrp/add absolute relocations
+# (R_AARCH64_ADR_PREL_PG_HI21 / R_AARCH64_ADD_ABS_LO12_NC) that are
+# inherently non-PIC and cannot be made PIC by a compile flag.  lld
+# still rejects them when linking liblibavcodec.a into the shared
+# librexruntime.so on Android.  Verified in run #17 (commit dc3f3a0)
+# which still produced 42 errors of the form:
+#   ld.lld: error: relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used
+#   against symbol 'ff_cos_32'; recompile with -fPIC
+#
+# Per the user's instruction: as a last-resort Android-only fallback,
+# drop the .S NEON sources from libavcodec and libavutil on Android.
+# The C fallback implementations in FFmpeg (HAVE_NEON=0) take over.
+# FFmpeg as a whole stays functional for XMA / WMA Pro decoding; only
+# the NEON-tuned inner loops are replaced by their C equivalents.
+#
+# We do this by wrapping the two `if(IS_ARM64) target_sources(... .S ...)`
+# blocks for libavutil and libavcodec in `if(IS_ARM64 AND NOT ANDROID)`.
+python3 - "$THIRDPARTY_CMAKE" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "REX_ANDROID_FFMPEG_NO_ASM" in s:
+    print(f"::notice::{p} already has Android FFmpeg no-asm fallback")
+else:
+    # 12a. libavutil AArch64 NEON source block.
+    old1 = """# ARM64 optimizations for libavutil
+if(IS_ARM64)
+    target_sources(libavutil PRIVATE
+        ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
+        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_init.c
+        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_neon.S
+    )
+    target_compile_definitions(libavutil PRIVATE
+        HAVE_NEON=1
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=1
+    )
+endif()"""
+    new1 = """# ARM64 optimizations for libavutil
+# REX_ANDROID_FFMPEG_NO_ASM: skip NEON .S on Android - hand-written
+# adrp/add relocations are non-PIC and lld rejects them in shared links.
+if(IS_ARM64 AND NOT ANDROID)
+    target_sources(libavutil PRIVATE
+        ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
+        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_init.c
+        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_neon.S
+    )
+    target_compile_definitions(libavutil PRIVATE
+        HAVE_NEON=1
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=1
+    )
+elseif(ANDROID)
+    # Android: keep cpu.c + float_dsp_init.c (C-only init shims); skip
+    # the NEON .S; HAVE_NEON=0 forces FFmpeg to use its portable C
+    # fallbacks for float_dsp operations.
+    target_sources(libavutil PRIVATE
+        ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
+        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_init.c
+    )
+    target_compile_definitions(libavutil PRIVATE
+        HAVE_NEON=0
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=0
+    )
+endif()"""
+    # 12b. libavcodec AArch64 NEON source block.
+    old2 = """# ARM64 optimizations for libavcodec
+if(IS_ARM64)
+    target_sources(libavcodec PRIVATE
+        ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/fft_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/mdct_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/simple_idct_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/videodsp.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
+    )
+    target_compile_definitions(libavcodec PRIVATE
+        HAVE_NEON=1
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=1
+    )
+endif()"""
+    new2 = """# ARM64 optimizations for libavcodec
+# REX_ANDROID_FFMPEG_NO_ASM: skip NEON .S on Android - hand-written
+# adrp/add relocations are non-PIC and lld rejects them in shared links.
+# The *_init_aarch64.c files register NEON dispatch at runtime; with the
+# .S files excluded they become no-ops (HAVE_NEON=0 below makes FFmpeg's
+# config dispatch fall back to the C implementations).
+if(IS_ARM64 AND NOT ANDROID)
+    target_sources(libavcodec PRIVATE
+        ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/fft_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/mdct_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/simple_idct_neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/videodsp.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
+        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
+    )
+    target_compile_definitions(libavcodec PRIVATE
+        HAVE_NEON=1
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=1
+    )
+elseif(ANDROID)
+    # Android: build only the C init shims; HAVE_NEON=0 forces FFmpeg to
+    # use its portable C fallbacks for FFT/MDCT/IDCT/etc.
+    target_sources(libavcodec PRIVATE
+        ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
+        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
+    )
+    target_compile_definitions(libavcodec PRIVATE
+        HAVE_NEON=0
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=0
+    )
+endif()"""
+    changed = False
+    if old1 in s:
+        s = s.replace(old1, new1)
+        changed = True
+    if old2 in s:
+        s = s.replace(old2, new2)
+        changed = True
+    if changed:
+        p.write_text(s)
+        print(f"::notice::{p} patched: FFmpeg AArch64 NEON .S excluded on Android (REX_ANDROID_FFMPEG_NO_ASM)")
+    else:
+        print(f"::warning::{p} could not find libavutil/libavcodec ARM64 source blocks")
+PY
+
 echo "Patch complete."
