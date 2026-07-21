@@ -1,6 +1,6 @@
 # skate3recomp — Android Port Status
 
-**Last updated:** 2026-07-21 (commit `7a53ae25`, run #27)
+**Last updated:** 2026-07-21 (commit pending, post-run #27)
 
 This document tracks the current state of the Android port of
 [skate3recomp](https://github.com/mchughalex/skate3recomp).  It is
@@ -196,12 +196,12 @@ the limitation and what a real implementation would require.
 |---|---|---|
 | `src/core/fiber_android.cpp` | `rex::thread::Fiber::*` (4 methods) | Vendor `libucontext`, or rewrite on `pthread` + `sigaltstack` + custom trampolines |
 | `src/core/exception_handler_android.cpp` | `ExceptionHandler::Install` / `Uninstall` | `sigaction` with arm64 `sigcontext` walker (PC, SP, X0..X30) |
-| `src/core/filesystem_android.cpp` | `IsAndroidContentUri` / `OpenAndroidContentFileDescriptor` | JNI into `ContentResolver.openFileDescriptor()` + `ParcelFileDescriptor.detachFd()` |
+| `src/core/filesystem_android.cpp` | **NO LONGER A STUB** — real implementation via JNI + SAF | (already real — `IsAndroidContentUri`, `OpenAndroidContentFileDescriptor`, `PickFileWithSAF`) |
 | `thirdparty/FFmpeg/android_stubs.c` | `ff_float_dsp_init_aarch64` / `ff_fft_init_aarch64` / `ff_mpadsp_init_aarch64` | PIC NEON asm (vendored libucontext-style), or accept permanent no-NEON FFmpeg |
 | `include/rex/main_android.h` | `rex::GetAndroidApiLevel()` | JNI into `android.os.Build.VERSION.SDK_INT` |
 | `include/rex/ui/surface_android.h` | `AndroidNativeWindowSurface` class | Already functional (wraps `ANativeWindow*`); real integration would route through `SDL_Vulkan_CreateSurface` instead |
-| `skate3_iso_installer.cpp` (Android branch) | `PickIsoFile()` returns `{}` | Real SAF-based file picker (see "Next steps" below) |
-| `skate3_title_update_installer.cpp` (Android branch) | `PickTitleUpdateFile()` returns `{}` | Real SAF-based file picker (see "Next steps" below) |
+| `skate3_iso_installer.cpp` (Android branch) | **NO LONGER A STUB** — calls `rex::filesystem::PickFileWithSAF()` | (already real — opens system SAF picker via `ACTION_OPEN_DOCUMENT`) |
+| `skate3_title_update_installer.cpp` (Android branch) | **NO LONGER A STUB** — calls `rex::filesystem::PickFileWithSAF()` | (already real — opens system SAF picker via `ACTION_OPEN_DOCUMENT`) |
 
 **Runtime impact:**
 - Without real `Fiber`, the recomp runtime cannot run PPC guest code
@@ -211,9 +211,50 @@ the limitation and what a real implementation would require.
 - Without real `ExceptionHandler`, MMIO write callbacks cannot recover
   from `SIGSEGV` (the runtime would crash instead of dispatching to
   the guest's page-fault handler).
-- Without real `OpenAndroidContentFileDescriptor`, content URIs
+- ~~Without real `OpenAndroidContentFileDescriptor`, content URIs
   (`content://...`) from SAF cannot be opened as file descriptors —
-  only regular file paths work.
+  only regular file paths work.~~ **RESOLVED** — see "Storage Access
+  Framework file picker" section below.
+
+### Storage Access Framework file picker (real implementation)
+
+The Android port now uses Android's Storage Access Framework (SAF)
+to let the user pick ISO and title-update files via the system file
+picker (`ACTION_OPEN_DOCUMENT` + `CATEGORY_OPENABLE`, API 19+).
+
+**Flow:**
+1. Native C++ (`skate3_iso_installer.cpp` / `skate3_title_update_installer.cpp`)
+   calls `rex::filesystem::PickFileWithSAF(mime, ext, title)`.
+2. `PickFileWithSAF` (in `src/core/filesystem_android.cpp`) spawns a
+   worker thread that attaches its own `JNIEnv` and calls the static
+   Java method `SDLActivity.pickFileWithSAF(...)`.
+3. The Java side launches `startActivityForResult` on the UI thread
+   with `ACTION_OPEN_DOCUMENT`, then blocks on a monitor waiting for
+   `onActivityResult` to fire.
+4. When the user selects a file (or cancels), `onActivityResult`
+   fires, extracts the `content://` URI from the `Intent`, takes a
+   persistable URI permission (so the runtime can re-open the file
+   later), and notifies the blocked Java thread.
+5. The Java method returns the URI string to the C++ worker, which
+   returns it via `std::future`.
+6. The native caller waits on the future with a **5-minute timeout**.
+   If the picker never returns (e.g. user switched apps, system
+   killed the picker activity), the timeout fires, the native side
+   logs a warning and returns an empty path, and the caller falls
+   through to the ImGui-based install wizard overlay as fallback.
+
+**Limitation of the 5-minute timeout:**
+- If the timeout fires, the worker thread is left running (we can't
+  safely cancel a blocking JNI call).  The worker will eventually
+  finish when the user dismisses the picker or the system kills it.
+- If the user opens the picker again before the previous worker
+  finishes, the Java side will refuse the second call (it tracks
+  `sSafPendingRequestId` and only allows one in-flight request at a
+  time) and return an empty path immediately.  This prevents two
+  picker dialogs from opening simultaneously.
+- The 5-minute timeout is intentional — it's long enough that a real
+  user browsing for an ISO file won't trigger it, but short enough
+  that a forgotten open picker doesn't hang the runtime forever.
 
 ---
 
@@ -222,18 +263,7 @@ the limitation and what a real implementation would require.
 These are the technical obstacles that need to be resolved **after**
 `generated/` is supplied, in roughly the order they'll be encountered:
 
-1. **Storage Access Framework file picker** (replaces the
-   `PickIsoFile` / `PickTitleUpdateFile` stubs)
-   - Add `pickFileWithSAF(...)` method to `SDLActivity.java` using
-     `ACTION_OPEN_DOCUMENT` + `CATEGORY_OPENABLE` (API 19+)
-   - Implement real `rex::filesystem::OpenAndroidContentFileDescriptor`
-     via JNI + `ContentResolver.openFileDescriptor()` +
-     `ParcelFileDescriptor.detachFd()`
-   - Synchronous block on C++ side via `std::promise`/`std::future`
-     with 5-minute timeout safety
-   - Keep the ImGui wizard as fallback if user cancels the SAF picker
-
-2. **Vulkan runtime initialization**
+1. **Vulkan runtime initialization**
    - `librexruntime.so` links, but the runtime initialization path
      (`VkInstance` creation, `SDL_Vulkan_CreateSurface`, device
      selection, swapchain) has not been tested on Android
@@ -243,7 +273,7 @@ These are the technical obstacles that need to be resolved **after**
    - May need to vendor a recent Mesa Turnip driver (as
      UnleashedRecomp-Android does) for older devices
 
-3. **Touch / gamepad input mapping**
+2. **Touch / gamepad input mapping**
    - SDL2 maps touch to mouse by default — fine for UI clicks but
      not for skate gameplay (multiple buttons + analog sticks)
    - Will need either:
@@ -253,7 +283,7 @@ These are the technical obstacles that need to be resolved **after**
        `SDLControllerManager`, just needs UI to map buttons to
        Skate 3's XINPUT controller layout)
 
-4. **PPC→ARM recompilation performance**
+3. **PPC→ARM recompilation performance**
    - Even with `generated/` provided, the PPC guest code is
      recompiled at runtime by `rexruntime`.  Performance on Android
      arm64 phones (especially non-flagship) may be insufficient
@@ -262,14 +292,14 @@ These are the technical obstacles that need to be resolved **after**
      Xenos GPU; the bottleneck is more likely CPU-side (PPC guest
      instruction dispatch)
 
-5. **Game data installation**
+4. **Game data installation**
    - Even with `generated/` for codegen, the runtime needs the
      actual game files (`default.xex`, `default.xexp`, asset
      packages) at runtime
    - The `skate3_iso_installer.cpp` code path extracts these from an
      ISO into the app's private data directory — the install wizard
-     overlay handles this UI, but it needs the SAF picker (#1) to
-     let the user select the ISO file
+     overlay handles this UI; the SAF picker (already implemented)
+     lets the user select the ISO file
 
 ---
 

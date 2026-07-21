@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <rex/logging.h>
+#include <rex/filesystem.h>
 #include <rex/ui/overlay/install_wizard_overlay.h>
 #include <rex/ui/windowed_app_context.h>
 
@@ -113,12 +114,20 @@ std::filesystem::path PickIsoFile() {
   return skate3::PickIsoFileMacOS();
 }
 #elif defined(__ANDROID__)
-// STUB Android: no native file picker (GTK not available).  Returning
-// an empty path makes the caller fall through to the rexglue-sdk
-// ImGui-based install wizard overlay, which lets the user pick the ISO
-// via on-screen UI instead of a native dialog.
+// Android: use Storage Access Framework (ACTION_OPEN_DOCUMENT) to let
+// the user pick the ISO via the system file picker.  Returns the
+// content:// URI of the selected file, or empty path if cancelled.
+// The rexglue-sdk's mapped_memory_posix.cpp knows how to open
+// content:// URIs via OpenAndroidContentFileDescriptor.
 std::filesystem::path PickIsoFile() {
-  return {};
+  std::string uri = rex::filesystem::PickFileWithSAF(
+      "application/octet-stream",  // MIME filter (any binary)
+      ".iso,.ISO",                 // extension hint for dialog title
+      "Select Skate 3 Xbox 360 ISO");
+  if (uri.empty()) {
+    return {};
+  }
+  return std::filesystem::path(uri);
 }
 #else
 std::filesystem::path PickIsoFile() {

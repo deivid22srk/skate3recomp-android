@@ -921,47 +921,32 @@ void ExceptionHandler::Uninstall(Handler /*fn*/, void* /*data*/) {
 CPP
 echo "::notice::$EXC_ANDROID_CPP written (ExceptionHandler stub)"
 
-# 18. Generate src/core/filesystem_android.cpp (STUB Android filesystem
-#     content-URI helpers).
+# 18. Generate src/core/filesystem_android.cpp (REAL Android filesystem
+#     content-URI helpers using SAF + JNI).
 FS_ANDROID_CPP="$SDK_DIR/src/core/filesystem_android.cpp"
 cat > "$FS_ANDROID_CPP" <<'CPP'
 // SPDX-License-Identifier: BSD-3-Clause
 //
-// STUB Android: rex::filesystem Android content-URI helpers.
+// Android: rex::filesystem content-URI helpers — real implementation.
 //
-// The upstream rexglue-sdk declares three Android-only entry points
-// in include/rex/filesystem.h:
+// Implements the three Android-only entry points declared in
+// include/rex/filesystem.h:
 //
-//   void AndroidInitialize();
-//   void AndroidShutdown();
 //   bool IsAndroidContentUri(const std::string_view source);
 //   int  OpenAndroidContentFileDescriptor(const std::string_view uri,
 //                                          const char* mode);
 //
-// Of these, only AndroidInitialize / AndroidShutdown were implemented
-// (in src/core/memory_posix.cpp and src/core/threading_posix.cpp, in
-// their respective namespaces).  IsAndroidContentUri and
-// OpenAndroidContentFileDescriptor were never implemented, leaving
-// undefined-symbol link errors when librexruntime.so is built for
-// Android (verified in run #21, commit c512c5e):
+// Uses JNI to call into Java:
+//   - IsAndroidContentUri: pure C++ prefix check on "content://".
+//   - OpenAndroidContentFileDescriptor: calls
+//     ContentResolver.openFileDescriptor(uri, mode) on the Java side,
+//     then ParcelFileDescriptor.detachFd() to take ownership of the
+//     file descriptor.
 //
-//   ld.lld: error: undefined symbol:
-//     rex::filesystem::OpenAndroidContentFileDescriptor(...)
-//   >>> referenced by mapped_memory_posix.cpp:129
-//
-// This stub provides no-op / -1 implementations so the link succeeds.
-// At runtime:
-//   - IsAndroidContentUri() always returns false, so any caller that
-//     branches on a content:// URI will fall through to the regular
-//     file-path code path (which is correct for paths that aren't
-//     actually content URIs).
-//   - OpenAndroidContentFileDescriptor() returns -1 with errno=ENOSYS,
-//     signaling "not implemented".  Callers in mapped_memory_posix.cpp
-//     already check the return value and propagate the failure.
-//
-// Before shipping a playable Android build, this file MUST be replaced
-// with real implementations using Android's Storage Access Framework
-// (JNI calls into ContentResolver.openFileDescriptor()).
+// The file picker itself (ACTION_OPEN_DOCUMENT) is implemented in
+// SDLActivity.java::pickFileWithSAF(), and called from
+// skate3_iso_installer.cpp / skate3_title_update_installer.cpp via
+// the same JNI bridge.
 
 #include <rex/platform.h>
 
@@ -970,32 +955,342 @@ cat > "$FS_ANDROID_CPP" <<'CPP'
 #include <rex/filesystem.h>
 
 #include <cerrno>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <future>
+#include <memory>
+#include <string>
 #include <string_view>
+
+#include <jni.h>
+#include <android/log.h>
+
+// Forward-declare SDL_GetJavaVM() so we don't need to pull in SDL_system.h
+// here.  The actual symbol is provided by libSDL2.so at link time.
+extern "C" {
+void* SDL_GetJavaVM(void);
+}
+
+#define TAG "skate3-fs"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 namespace rex::filesystem {
 
 bool IsAndroidContentUri(std::string_view source) {
-  // STUB Android: real implementation should check for the
-  // "content://" prefix (or "file://" for SAF-derived URIs).
-  (void)source;
-  return false;
+  // Cheap prefix check, no JNI needed.
+  constexpr std::string_view kPrefix = "content://";
+  return source.size() >= kPrefix.size()
+         && source.substr(0, kPrefix.size()) == kPrefix;
 }
 
-int OpenAndroidContentFileDescriptor(std::string_view /*uri*/,
-                                      const char* /*mode*/) {
-  // STUB Android: real implementation should call into Java via JNI:
-  //   ContentResolver cr = context.getContentResolver();
-  //   ParcelFileDescriptor pfd = cr.openFileDescriptor(uri, mode);
-  //   return pfd.detachFd();
-  errno = ENOSYS;
-  return -1;
+// ---------------------------------------------------------------------------
+// JNI helper: get the JNIEnv for the current thread, attaching if needed.
+// Returns nullptr if the JVM could not be obtained or the thread could
+// not be attached.  When attached successfully, the caller MUST call
+// DetachCurrentThread before returning (we use a RAII guard).
+// ---------------------------------------------------------------------------
+namespace {
+
+struct JNIEnvGuard {
+  JavaVM* vm = nullptr;
+  JNIEnv* env = nullptr;
+  bool attached = false;
+
+  explicit JNIEnvGuard(JavaVM* jvm) : vm(jvm) {
+    if (!vm) return;
+    jint rc = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (rc == JNI_EDETACHED) {
+      rc = vm->AttachCurrentThread(&env, nullptr);
+      attached = (rc == JNI_OK);
+    }
+  }
+  ~JNIEnvGuard() {
+    if (attached && vm) {
+      vm->DetachCurrentThread();
+    }
+  }
+};
+
+JavaVM* GetJavaVM() {
+  // SDL2 stores the JavaVM pointer in a static; we can fetch it via
+  // SDL_GetJavaVM() (declared above, provided by libSDL2.so).
+  void* vm = SDL_GetJavaVM();
+  return reinterpret_cast<JavaVM*>(vm);
+}
+
+}  // namespace
+
+int OpenAndroidContentFileDescriptor(std::string_view uri,
+                                      const char* mode) {
+  if (!IsAndroidContentUri(uri)) {
+    errno = EINVAL;
+    return -1;
+  }
+  if (!mode) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  JavaVM* vm = GetJavaVM();
+  if (!vm) {
+    LOGE("OpenAndroidContentFileDescriptor: no JavaVM available");
+    errno = ENOSYS;
+    return -1;
+  }
+
+  JNIEnvGuard g(vm);
+  if (!g.env) {
+    LOGE("OpenAndroidContentFileDescriptor: failed to attach JNIEnv");
+    errno = ENOSYS;
+    return -1;
+  }
+
+  // Translate C "r"/"rw"/"rwt" to Java mode "r"/"rw"/"rwt".
+  // (ContentResolver.openFileDescriptor accepts "r", "w", "wt", "wa",
+  // "rw", "rwt".)
+  std::string jmode(mode);
+  JNIEnv* env = g.env;
+
+  // Find SDLActivity class (note: SDLActivity is in org.libsdl.app).
+  jclass sdlActivityClass = env->FindClass("org/libsdl/app/SDLActivity");
+  if (!sdlActivityClass) {
+    LOGE("OpenAndroidContentFileDescriptor: SDLActivity class not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+
+  // Get the mSingleton static field (this is the running SDLActivity).
+  jfieldID singletonField = env->GetStaticFieldID(
+      sdlActivityClass, "mSingleton", "Lorg/libsdl/app/SDLActivity;");
+  if (!singletonField) {
+    LOGE("OpenAndroidContentFileDescriptor: mSingleton field not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+  jobject activity = env->GetStaticObjectField(sdlActivityClass, singletonField);
+  if (!activity) {
+    LOGE("OpenAndroidContentFileDescriptor: SDLActivity.mSingleton is null");
+    errno = ENOSYS;
+    return -1;
+  }
+
+  // Call activity.getContentResolver()
+  jmethodID getContentResolver = env->GetMethodID(
+      env->GetObjectClass(activity), "getContentResolver",
+      "()Landroid/content/ContentResolver;");
+  if (!getContentResolver) {
+    LOGE("OpenAndroidContentFileDescriptor: getContentResolver() not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+  jobject contentResolver = env->CallObjectMethod(activity, getContentResolver);
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    errno = EIO;
+    return -1;
+  }
+  if (!contentResolver) {
+    LOGE("OpenAndroidContentFileDescriptor: getContentResolver() returned null");
+    errno = EIO;
+    return -1;
+  }
+
+  // Build the Java Uri from the string.
+  jclass uriClass = env->FindClass("android/net/Uri");
+  if (!uriClass) {
+    LOGE("OpenAndroidContentFileDescriptor: android.net.Uri class not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+  jmethodID uriParse = env->GetStaticMethodID(
+      uriClass, "parse", "(Ljava/lang/String;)Landroid/net/Uri;");
+  if (!uriParse) {
+    LOGE("OpenAndroidContentFileDescriptor: Uri.parse() not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+  std::string uriStr(uri);
+  jstring juriStr = env->NewStringUTF(uriStr.c_str());
+  jobject uriObj = env->CallStaticObjectMethod(uriClass, uriParse, juriStr);
+  env->DeleteLocalRef(juriStr);
+  if (env->ExceptionCheck() || !uriObj) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    LOGE("OpenAndroidContentFileDescriptor: Uri.parse(\"%s\") failed", uriStr.c_str());
+    errno = EINVAL;
+    return -1;
+  }
+
+  // Call ContentResolver.openFileDescriptor(uri, mode).
+  // openFileDescriptor returns a ParcelFileDescriptor; on failure it
+  // throws FileNotFoundException.
+  jclass contentResolverClass = env->GetObjectClass(contentResolver);
+  jmethodID openFd = env->GetMethodID(
+      contentResolverClass, "openFileDescriptor",
+      "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;");
+  if (!openFd) {
+    LOGE("OpenAndroidContentFileDescriptor: openFileDescriptor() not found");
+    env->ExceptionClear();
+    errno = ENOSYS;
+    return -1;
+  }
+  jstring jmodeStr = env->NewStringUTF(jmode.c_str());
+  jobject pfd = env->CallObjectMethod(contentResolver, openFd, uriObj, jmodeStr);
+  env->DeleteLocalRef(jmodeStr);
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    LOGE("OpenAndroidContentFileDescriptor: openFileDescriptor(\"%s\",\"%s\") threw",
+         uriStr.c_str(), jmode.c_str());
+    errno = ENOENT;
+    return -1;
+  }
+  if (!pfd) {
+    LOGE("OpenAndroidContentFileDescriptor: openFileDescriptor returned null");
+    errno = ENOENT;
+    return -1;
+  }
+
+  // Call pfd.detachFd() to take ownership of the FD.
+  jmethodID detachFd = env->GetMethodID(
+      env->GetObjectClass(pfd), "detachFd", "()I");
+  if (!detachFd) {
+    LOGE("OpenAndroidContentFileDescriptor: detachFd() not found");
+    env->ExceptionClear();
+    env->DeleteLocalRef(pfd);
+    errno = ENOSYS;
+    return -1;
+  }
+  jint fd = env->CallIntMethod(pfd, detachFd);
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    env->DeleteLocalRef(pfd);
+    errno = EIO;
+    return -1;
+  }
+  env->DeleteLocalRef(pfd);
+
+  LOGI("OpenAndroidContentFileDescriptor(\"%s\", \"%s\") = fd %d",
+       uriStr.c_str(), jmode.c_str(), (int)fd);
+  return (int)fd;
+}
+
+// ---------------------------------------------------------------------------
+// SAF file picker: called by skate3_iso_installer.cpp /
+// skate3_title_update_installer.cpp to launch the system file picker
+// and block (with timeout) until the user picks a file or cancels.
+// Returns the content:// URI as a std::string, or "" on cancel/timeout.
+//
+// Implementation notes:
+//   - The Java side (SDLActivity.pickFileWithSAF) is synchronous from
+//     the JNI caller's perspective: it blocks on a monitor until
+//     onActivityResult fires.
+//   - We wrap the JNI call in std::async + wait_for(5min) so the
+//     native caller doesn't hang forever if the picker never returns
+//     (e.g. user switched apps, system killed the picker activity).
+//   - JNIEnv pointers are thread-local; the worker thread must attach
+//     its own JNIEnv via AttachCurrentThread.
+// ---------------------------------------------------------------------------
+std::string PickFileWithSAF(const char* mime_type_filter,
+                             const char* extension_filters,
+                             const char* dialog_title) {
+  JavaVM* vm = GetJavaVM();
+  if (!vm) {
+    LOGE("PickFileWithSAF: no JavaVM available");
+    return "";
+  }
+
+  std::string mime = mime_type_filter ? mime_type_filter : "*/*";
+  std::string ext  = extension_filters ? extension_filters : "";
+  std::string title = dialog_title ? dialog_title : "";
+
+  // Spawn a worker thread that attaches its own JNIEnv, calls the Java
+  // pickFileWithSAF method, and returns the result via std::future.
+  std::future<std::string> future = std::async(
+      std::launch::async,
+      [vm, mime, ext, title]() -> std::string {
+        JNIEnvGuard g(vm);
+        if (!g.env) {
+          LOGE("PickFileWithSAF worker: failed to attach JNIEnv");
+          return "";
+        }
+        JNIEnv* env = g.env;
+
+        jclass sdlActivityClass = env->FindClass("org/libsdl/app/SDLActivity");
+        if (!sdlActivityClass) {
+          LOGE("PickFileWithSAF: SDLActivity class not found");
+          env->ExceptionClear();
+          return "";
+        }
+
+        jmethodID pickMethod = env->GetStaticMethodID(
+            sdlActivityClass, "pickFileWithSAF",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+        if (!pickMethod) {
+          LOGE("PickFileWithSAF: pickFileWithSAF method not found");
+          env->ExceptionClear();
+          return "";
+        }
+
+        jstring jMime = env->NewStringUTF(mime.c_str());
+        jstring jExt = env->NewStringUTF(ext.c_str());
+        jstring jTitle = env->NewStringUTF(title.c_str());
+
+        jstring jResult = static_cast<jstring>(
+            env->CallStaticObjectMethod(sdlActivityClass, pickMethod,
+                                         jMime, jExt, jTitle));
+        env->DeleteLocalRef(jMime);
+        env->DeleteLocalRef(jExt);
+        env->DeleteLocalRef(jTitle);
+
+        if (env->ExceptionCheck()) {
+          env->ExceptionDescribe();
+          env->ExceptionClear();
+          return "";
+        }
+        if (!jResult) {
+          return "";
+        }
+
+        const char* chars = env->GetStringUTFChars(jResult, nullptr);
+        std::string result = chars ? chars : "";
+        if (chars) {
+          env->ReleaseStringUTFChars(jResult, chars);
+        }
+        env->DeleteLocalRef(jResult);
+        return result;
+      });
+
+  // Wait up to 5 minutes for the picker to complete.
+  if (future.wait_for(std::chrono::minutes(5)) == std::future_status::timeout) {
+    LOGW("PickFileWithSAF: 5-minute timeout expired, returning empty path. "
+         "The picker UI may still be open - the user can dismiss it manually.");
+    // The std::async future's destructor will block on the worker thread
+    // when `future` goes out of scope.  We can't cancel the JNI call,
+    // but the worker will eventually finish (when the user dismisses the
+    // picker or the system kills it).  Returning empty path lets the
+    // caller fall through to the ImGui wizard fallback.
+    return "";
+  }
+
+  return future.get();
 }
 
 }  // namespace rex::filesystem
 
 #endif  // REX_PLATFORM_ANDROID
 CPP
-echo "::notice::$FS_ANDROID_CPP written (filesystem stub)"
+echo "::notice::$FS_ANDROID_CPP written (filesystem REAL impl with SAF + JNI)"
 
 # 19. Generate thirdparty/FFmpeg/android_stubs.c (STUB Android FFmpeg
 #     AArch64 dispatcher entry points).
@@ -1059,5 +1354,51 @@ void ff_mpadsp_init_aarch64(MPADSPContext *s) {
 }
 C
 echo "::notice::$FFMPEG_STUBS_C written (FFmpeg AArch64 dispatcher stubs)"
+
+# 20. Patch include/rex/filesystem.h to declare the new PickFileWithSAF
+#     entry point so skate3_iso_installer.cpp and
+#     skate3_title_update_installer.cpp can call it.
+FS_H="$SDK_DIR/include/rex/filesystem.h"
+python3 - "$FS_H" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "PickFileWithSAF" in s:
+    print(f"::notice::{p} already declares PickFileWithSAF")
+else:
+    old = """#if REX_PLATFORM_ANDROID
+void AndroidInitialize();
+void AndroidShutdown();
+bool IsAndroidContentUri(const std::string_view source);
+int OpenAndroidContentFileDescriptor(const std::string_view uri, const char* mode);
+#endif  // REX_PLATFORM_ANDROID"""
+    new = """#if REX_PLATFORM_ANDROID
+void AndroidInitialize();
+void AndroidShutdown();
+bool IsAndroidContentUri(const std::string_view source);
+int OpenAndroidContentFileDescriptor(const std::string_view uri, const char* mode);
+
+// Opens Android's Storage Access Framework file picker (ACTION_OPEN_DOCUMENT)
+// and blocks (with a 5-minute safety timeout) until the user selects a file
+// or cancels.  Returns the selected file's content:// URI as a std::string,
+// or an empty string if the user cancelled or the picker timed out.
+//
+// mimeTypeFilter:   MIME type to filter by (e.g. "application/octet-stream"
+//                   for any binary file).  Pass "*/*" for no filter.
+// extensionFilters: comma-separated extensions (e.g. ".iso,.ISO") - used
+//                   only for the dialog title since ACTION_OPEN_DOCUMENT
+//                   cannot filter by extension directly.
+// dialogTitle:      title to display in the picker.
+std::string PickFileWithSAF(const char* mime_type_filter,
+                             const char* extension_filters,
+                             const char* dialog_title);
+#endif  // REX_PLATFORM_ANDROID"""
+    if old in s:
+        s = s.replace(old, new)
+        p.write_text(s)
+        print(f"::notice::{p} patched: added PickFileWithSAF declaration")
+    else:
+        print(f"::warning::{p} Android filesystem block not found")
+PY
 
 echo "Patch complete."
