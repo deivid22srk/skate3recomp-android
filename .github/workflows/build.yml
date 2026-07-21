@@ -117,6 +117,11 @@ jobs:
           mv SDL-release-* SDL
           ls -d SDL
 
+      - name: Patch rexglue-sdk for Android (SDL3 backend)
+        run: |
+          chmod +x .github/scripts/patch-rexglue-android.sh
+          .github/scripts/patch-rexglue-android.sh
+
       - name: Configure Android native build
         env:
           VCPKG_ROOT: ${{ github.workspace }}/third_party/vcpkg
