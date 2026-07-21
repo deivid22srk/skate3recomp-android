@@ -98,8 +98,13 @@ jobs:
           #   the rexglue codegen tool).  The Android cross-build
           #   doesn't need them because our patch script makes GTK3
           #   conditional on NOT ANDROID.
+          # libc++-18-dev, libc++abi-18-dev: clang 18's default
+          #   libstdc++ doesn't expose std::expected (C++23).  Using
+          #   libc++ instead (via -stdlib=libc++ in the host-tools
+          #   configure step below) provides full C++23 support.
           sudo apt-get install -y ninja-build ccache rsync \
-            libgtk-3-dev libx11-xcb-dev
+            libgtk-3-dev libx11-xcb-dev \
+            libc++-18-dev libc++abi-18-dev
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
@@ -115,6 +120,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++" \
+            -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++abi" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           # Build only the rexglue tool (not the full skate3 target,
