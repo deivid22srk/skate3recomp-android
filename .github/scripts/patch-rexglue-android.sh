@@ -336,9 +336,14 @@ else:
 PY
 
 # 9. Link libandroid on Android (needed for ASharedMemory_create and the
-#    android_* activity symbols used elsewhere in the SDK).  Insert AFTER
-#    the existing `if(UNIX) ... elseif(WIN32) ... endif()` block so we
-#    don't break its flow control.
+#    android_* activity symbols used elsewhere in the SDK).  Also exclude
+#    Android from the `pthread dl rt` link block on UNIX, because:
+#      - Bionic libc has pthread built-in (no -lpthread needed; the linker
+#        errors with "unable to find library -lpthread")
+#      - Bionic has no librt (the linker errors with
+#        "unable to find library -lrt")
+#    Non-Android UNIX platforms (Linux desktop, macOS) keep the original
+#    pthread/dl/rt linkage.
 python3 - "$CORE_CMAKE" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
@@ -354,21 +359,24 @@ else:
 elseif(WIN32)
     target_link_libraries(rexcore PUBLIC ws2_32)
 endif()"""
-    new = """if(UNIX)
+    new = """if(UNIX AND NOT ANDROID)
+    # Desktop POSIX: link libpthread, libdl, librt explicitly.
+    # Android/Bionic has pthread built into libc and has no librt, so
+    # adding -lpthread / -lrt there fails at link time with
+    # "unable to find library -lpthread" / "-lrt".
     target_link_libraries(rexcore PRIVATE pthread dl)
     if(NOT APPLE)
         target_link_libraries(rexcore PRIVATE rt)
     endif()
+elseif(ANDROID)
+    target_link_libraries(rexcore PRIVATE dl android log)
 elseif(WIN32)
     target_link_libraries(rexcore PUBLIC ws2_32)
-endif()
-if(ANDROID)
-    target_link_libraries(rexcore PRIVATE android log)
 endif()"""
     if old in s:
         s = s.replace(old, new)
         p.write_text(s)
-        print(f"::notice::{p} patched: link libandroid + liblog on Android")
+        print(f"::notice::{p} patched: pthread/rt excluded on Android, libandroid + liblog added")
     else:
         print(f"::warning::{p} UNIX/WIN32 link block not found, libandroid not added")
 PY

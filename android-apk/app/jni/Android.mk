@@ -1,24 +1,22 @@
 LOCAL_PATH := $(call my-dir)
 
+# LOCAL_PATH at this point is the absolute path of this directory
+# (android-apk/app/jni).  Save it in a variable that is not affected
+# by later subdir includes, since each subdir Android.mk will re-run
+# $(call my-dir) and reset LOCAL_PATH to its own directory.
+MAIN_LOCAL_PATH := $(LOCAL_PATH)
+
 # Include subdirectory makefiles FIRST so SDL2 module is declared before
-# main references it via LOCAL_SHARED_LIBRARIES.  Putting this after
-# include $(BUILD_SHARED_LIBRARY) causes ndk-build to fail with
-# "Module main depends on undefined modules: SDL2" because the SDL2
-# module has not been registered yet when main is being resolved.
-#
-# Note: each subdir Android.mk resets LOCAL_PATH via its own
-# $(call my-dir), so we must re-derive LOCAL_PATH here before declaring
-# the 'main' module - otherwise LOCAL_SRC_FILES := src/main.c would be
-# resolved against the last subdir's directory (e.g. the NDK's
-# cpufeatures/), causing:
-#   No rule to make target '.../cpufeatures/src/main.c'
+# main references it via LOCAL_SHARED_LIBRARIES.
 include $(call all-subdir-makefiles)
 
-LOCAL_PATH := $(call my-dir)
+# Re-set LOCAL_PATH for the main module declaration (it was reset by the
+# subdir includes above).
+LOCAL_PATH := $(MAIN_LOCAL_PATH)
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := main
-LOCAL_SRC_FILES := $(LOCAL_PATH)/src/main.c
+LOCAL_SRC_FILES := src/main.c
 LOCAL_SHARED_LIBRARIES := SDL2
 LOCAL_LDLIBS := -lGLESv1_CM -lGLESv2 -llog -landroid
 include $(BUILD_SHARED_LIBRARY)
