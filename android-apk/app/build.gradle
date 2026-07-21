@@ -1,0 +1,69 @@
+def buildAsLibrary = project.hasProperty('BUILD_AS_LIBRARY');
+def buildAsApplication = !buildAsLibrary
+if (buildAsApplication) {
+    apply plugin: 'com.android.application'
+} else {
+    apply plugin: 'com.android.library'
+}
+
+android {
+    if (buildAsApplication) {
+        namespace "org.libsdl.app"
+    }
+    compileSdkVersion 34
+    ndkVersion "29.0.14206865"
+    defaultConfig {
+        // Java sources and JNI bindings stay in the org.libsdl.app namespace
+        // (SDL registers natives against those class names); only the install
+        // identity changes.
+        applicationId "com.ea.skate3"
+        minSdkVersion 29
+        targetSdkVersion 34
+        versionCode 1
+        versionName "0.1.0-port"
+        externalNativeBuild {
+            ndkBuild {
+                arguments "APP_PLATFORM=android-29"
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    // CI provides the release keystore through environment variables (see
+    // .github/workflows/build.yml); local release builds stay unsigned.
+    if (System.getenv("ANDROID_KEYSTORE_FILE") != null) {
+        signingConfigs {
+            ci {
+                storeFile file(System.getenv("ANDROID_KEYSTORE_FILE"))
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("ANDROID_KEYSTORE_FILE") != null) {
+                signingConfig signingConfigs.ci
+            }
+        }
+    }
+    // libskate3.so is built by the project's own CMake pipeline (see
+    // .github/workflows/build.yml) and copied into
+    // src/main/jniLibs/arm64-v8a/ before Gradle runs; Gradle's own
+    // ndk-build of jni/Android.mk produces a SDL2-only libmain.so that
+    // bootstraps SDLActivity and loads libskate3.so at runtime.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}

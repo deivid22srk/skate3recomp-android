@@ -1,0 +1,222 @@
+# Builds the Skate 3 Recomp Android APK.
+#
+# This workflow cross-compiles the skate3 native target for Android arm64-v8a
+# using Android NDK + vcpkg, then packages it with a SDL2-based bootstrap
+# APK produced by Gradle.
+#
+# Game-derived inputs (default.xex, generated codegen sources) cannot live
+# in this public repository.  The workflow therefore:
+#   1. Attempts the full native build with whatever sources are present.
+#   2. If the native build fails (e.g. because generated/ is missing), falls
+#      back to building a tiny stub libskate3.so that surfaces a friendly
+#      "game files required" message at runtime.
+#   3. Always produces an installable debug APK so the pipeline stays green.
+#
+# Provide the optional repository VARIABLE `GAME_FILES_REPO` and SECRET
+# `GAME_FILES_TOKEN` (fine-grained PAT with Contents:read on that single
+# repository) to enable full game codegen.  The private repo must contain
+# default.xex / default.xexp / generated/ at its root.
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: "29.0.14206865"
+  SDL2_VERSION: "release-2.30.6"
+
+jobs:
+  build:
+    name: Build APK (arm64-v8a)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Optionally check out private game files
+        if: ${{ vars.GAME_FILES_REPO != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.GAME_FILES_REPO }}
+          token: ${{ secrets.GAME_FILES_TOKEN }}
+          path: game-files
+
+      - name: Stage game files (if provided)
+        if: ${{ vars.GAME_FILES_REPO != '' }}
+        run: |
+          # Place a Skate 3 retail dump under ./game and any pre-generated
+          # codegen outputs under ./generated so the CMake step can pick
+          # them up without re-running the host codegen pass.
+          if [ -d game-files/game ]; then
+            rsync -a game-files/game/ game/
+          fi
+          if [ -d game-files/generated ]; then
+            rsync -a game-files/generated/ generated/
+          fi
+          if [ -f game-files/default.xex ]; then
+            mkdir -p game
+            cp game-files/default.xex game/
+          fi
+          rm -rf game-files
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache rsync
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "ndk;$NDK_VERSION" "cmake;3.27.9" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg third_party/vcpkg
+          third_party/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-android-arm64-${{ hashFiles('third_party/rexglue-sdk/**/CMakeLists.txt') }}
+          restore-keys: vcpkg-android-arm64-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: android-arm64
+          max-size: 3G
+
+      - name: Fetch SDL2 sources for APK bootstrap
+        run: |
+          cd android-apk/app/jni
+          curl -sSL "https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL2_VERSION}.tar.gz" \
+            | tar xz
+          mv "SDL-${SDL2_VERSION#release-}" SDL
+          ls -d SDL
+
+      - name: Configure Android native build
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/third_party/vcpkg
+        run: |
+          cmake -S . -B out/build/android-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=third_party/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=arm64-android \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_SYSTEM_VERSION=29 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSKATE3_ANDROID=ON \
+            -DSKATE3_BUILD_PLATFORM=android-arm64 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build native libraries
+        id: native_build
+        continue-on-error: true
+        run: |
+          cmake --build out/build/android-arm64 --target skate3
+          if [ -f out/build/android-arm64/libskate3.so ]; then
+            echo "native_status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "native_status=missing" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Diagnose native build failure
+        if: steps.native_build.outcome != 'success' || steps.native_build.outputs.native_status != 'ok'
+        run: |
+          echo "::warning::Native libskate3.so was not produced.  Building fallback stub."
+          echo "This usually means generated/ codegen sources are missing or"
+          echo "the rexglue-sdk Vulkan backend needs additional Android patches."
+          # Re-run configure with verbose output for log diagnostics
+          cmake --build out/build/android-arm64 --target skate3 --verbose || true
+
+      - name: Build fallback stub libskate3.so
+        if: steps.native_build.outputs.native_status != 'ok'
+        run: |
+          mkdir -p out/build/android-arm64
+          cat > /tmp/stub.cpp <<'EOF'
+          #include <SDL.h>
+          extern "C" __attribute__((visibility("default")))
+          int SDL_main(int argc, char** argv) {
+              (void)argc; (void)argv;
+              SDL_ShowSimpleMessageBox(
+                  SDL_MESSAGEBOX_INFORMATION,
+                  "Skate 3 Recomp (Android port)",
+                  "Native libskate3.so could not be built in CI yet.\n\n"
+                  "Provide Skate 3 retail game files via the GAME_FILES_REPO "
+                  "secret, and ensure the rexglue-sdk Vulkan backend compiles "
+                  "for Android arm64-v8a.  See .github/workflows/build.yml for "
+                  "details.",
+                  NULL);
+              return 0;
+          }
+          EOF
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
+            --target=aarch64-linux-android29 \
+            -shared -fPIC -fexceptions -frtti \
+            -std=c++23 \
+            -I"android-apk/app/jni/SDL/include" \
+            /tmp/stub.cpp \
+            -o out/build/android-arm64/libskate3.so \
+            -llog -landroid
+          echo "stub_status=ok" >> "$GITHUB_ENV"
+
+      - name: Stage jniLibs
+        run: |
+          dest=android-apk/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$dest"
+          cp out/build/android-arm64/libskate3.so "$dest/"
+          ls -la "$dest"
+
+      - name: Build APK
+        working-directory: android-apk
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+            export ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/keystore.jks"
+            ./gradlew --no-daemon assembleRelease
+          else
+            ./gradlew --no-daemon assembleDebug
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skate3recomp-android-${{ github.ref_name || 'dev' }}
+          path: android-apk/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+
+      - name: Attach APK to release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find android-apk/app/build/outputs/apk -name '*.apk' -print0 |
+            xargs -0 gh release upload "$GITHUB_REF_NAME" --clobber || \
+            echo "No release for $GITHUB_REF_NAME yet; APK stays available as a workflow artifact."

@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UnleashedRecomp</string>
+    <string name="documents_game_title">Файлы игры Unleashed Recomp</string>
+    <string name="documents_game_summary">Активная игра, моды, конфигурация и сохранения</string>
+    <string name="documents_transfer_title">Передача файлов Unleashed Recomp</string>
+    <string name="documents_transfer_summary">Моды, импорт драйверов, логи и диагностические записи</string>
+    <string name="mod_manager_launcher_name">Unleashed: моды</string>
+    <string name="mod_manager_title">Моды Unleashed</string>
+    <string name="mod_manager_hint">Скопируйте каждый мод отдельной папкой в каталог mods, обновите список, включите моды и задайте их приоритет. Сохранение создаёт стандартную базу CPKREDIR; для применения перезапустите игру.</string>
+    <string name="mod_manager_open_files">Открыть «Файлы»</string>
+    <string name="mod_manager_refresh">Обновить</string>
+    <string name="mod_manager_save">Сохранить список</string>
+    <string name="mod_manager_empty">Совместимые mod.ini не найдены. Откройте папку, создайте mods/ и скопируйте туда моды HMM или UMM.</string>
+    <string name="mod_manager_found">Найдено совместимых модов: %1$d.</string>
+    <string name="mod_manager_saved">Сохранено активных модов: %1$d (в порядке приоритета).</string>
+    <string name="mod_manager_restart">Изменения модов применятся после перезапуска игры.</string>
+    <string name="mod_manager_error_directory">Не удалось создать каталог настроек: %1$s</string>
+    <string name="mod_manager_error_save">Не удалось сохранить базу модов: %1$s</string>
+    <string name="mod_manager_error_files">Не удалось открыть системное приложение «Файлы».</string>
+    <string name="mod_settings_title">Настройки мода</string>
+    <string name="mod_settings_open">Настроить %1$s</string>
+    <string name="mod_settings_save">Сохранить настройки мода</string>
+    <string name="mod_settings_saved">Настройки мода сохранены. Перезапустите игру для их применения.</string>
+    <string name="mod_settings_empty">В ConfigSchemaFile нет поддерживаемых настроек.</string>
+    <string name="mod_settings_error">Не удалось изменить настройки мода: %1$s</string>
+
+    <string name="launcher_title">Unleashed Recomp</string>
+    <string name="launcher_subtitle">Проверьте установку и настройте игру перед запуском.</string>
+    <string name="launcher_game_files">Файлы игры</string>
+    <string name="launcher_open_files">Открыть папку игры</string>
+    <string name="launcher_recheck">Проверить снова</string>
+    <string name="launcher_graphics">Графический драйвер</string>
+    <string name="launcher_driver">Драйвер Vulkan</string>
+    <string name="launcher_render_mode">Режим рендера Turnip</string>
+    <string name="launcher_import_driver">Импорт .so / .zip</string>
+    <string name="launcher_driver_folder">Папка драйверов</string>
+    <string name="launcher_controls">Управление</string>
+    <string name="launcher_touch_policy">Экранные кнопки</string>
+    <string name="launcher_touch_camera">Управление камерой</string>
+    <string name="launcher_edit_layout">Настроить расположение кнопок</string>
+    <string name="launcher_mods">Моды</string>
+    <string name="launcher_mods_summary">Включайте совместимые моды HMM/UMM и задавайте их приоритет.</string>
+    <string name="launcher_manage_mods">Управление модами</string>
+    <string name="launcher_debug">Отладка</string>
+    <string name="launcher_show_fps">Показывать FPS</string>
+    <string name="launcher_show_profiler">Показывать оверлей профайлера</string>
+    <string name="launcher_skip_intro">Пропускать вступительные ролики</string>
+    <string name="launcher_validation">Проверка синхронизации Vulkan (медленно)</string>
+    <string name="launcher_gfx_capture">Записывать трассу GFXReconstruct (очень большой файл, медленно)</string>
+    <string name="launcher_open_logs">Открыть логи и трассы</string>
+    <string name="launcher_play">Запустить игру</string>
+    <string name="launcher_driver_pending">Пакетов драйвера для установки при следующем запуске: %1$d.</string>
+    <string name="launcher_driver_installed">Доступен импортированный драйвер: %1$s</string>
+    <string name="launcher_driver_builtin">Доступны системный и встроенные драйверы Turnip. Импортированный драйвер не найден.</string>
+    <string name="launcher_driver_recovery">Предыдущий запуск Vulkan не завершился. Автовосстановление выберет безопасный драйвер; если ошибка повторится, выберите здесь «Системный».</string>
+    <string name="launcher_log_found">Найден последний лог (%1$s).</string>
+    <string name="launcher_log_missing">Лога пока нет. Он появится после запуска игры.</string>
+    <string name="game_ready_all_dlc">Можно запускать. Найдены основная игра, обновление и все DLC.</string>
+    <string name="game_ready_missing_dlc">Можно запускать. Найдены основная игра и обновление; пакетов DLC: %1$d из %2$d.</string>
+    <string name="error_title">Нельзя продолжить</string>
+    <string name="error_storage_create">Не удалось создать папку приложения:\n%1$s\n\nПроверьте свободное место и доступность накопителя.</string>
+    <string name="error_storage_write">Нет доступа на запись в папку игры:\n%1$s\n\nВозможно, её создали через adb от другого пользователя. Удалите папку и позвольте приложению создать её заново.</string>
+    <string name="error_game_missing">Файлы игры не установлены. Скопируйте папки game, update и patched из распакованного дампа Xbox 360 в:\n%1$s\n\nAPK, файлы ПК-версии и ярлык игры не подходят.</string>
+    <string name="error_game_partial">Установка неполная или повреждена. Не найдены обязательные файлы:%1$s\n\nОжидаемая корневая папка:\n%2$s</string>
+    <string name="error_game_nested">Похоже, файлы игры вложены в лишнюю папку (%1$s). Переместите папки game, update, patched и необязательную dlc непосредственно в:\n%2$s</string>
+    <string name="error_settings_save">Не удалось сохранить настройки: %1$s</string>
+    <string name="error_layout_editor">Не удалось запустить редактор управления: %1$s</string>
+    <string name="error_layout_requires_game">Редактор использует рендер игры, поэтому сначала нужна корректная установка файлов игры.</string>
+    <string name="error_driver_extension">Выберите обычную библиотеку Vulkan .so или пакет AdrenoTools/ExynosTools в формате .zip.</string>
+    <string name="error_driver_copy">Не удалось импортировать драйвер: %1$s</string>
+    <string name="error_open_files">Не удалось открыть папку приложения в системных «Файлах».</string>
+    <string name="driver_imported">%1$s скопирован. Драйвер будет проверен и установлен при запуске игры.</string>
+    <string name="launcher_install_game">Установить файлы игры (.zip / папка)</string>
+    <string name="launcher_install_mod">Установить мод (.zip / папка)</string>
+    <string name="install_source_zip">Из ZIP-архива</string>
+    <string name="install_source_folder">Из папки</string>
+    <string name="install_source_iso_packages">Из ISO / файлов обновления / DLC</string>
+    <string name="install_progress_title">Установка…</string>
+    <string name="install_progress_status">Скопировано файлов: %1$d, %2$s</string>
+    <string name="install_scanning">Чтение источника…</string>
+    <string name="install_cancel">Отмена</string>
+    <string name="install_done_game">Файлы игры установлены. Пропатченный исполняемый файл при необходимости будет создан автоматически при первом запуске.</string>
+    <string name="install_done_iso_staged">Файлы установщика подготовлены. Нажмите «Запустить игру», чтобы проверить и установить основную игру, обновление и необязательные DLC.</string>
+    <string name="launcher_install_staged">Файлы установщика готовы. Запустите игру для их проверки и установки.</string>
+    <string name="install_done_mod">Установлено модов: %1$d. Включите их в менеджере модов.</string>
+    <string name="install_cancelled">Установка отменена. Частично скопированные файлы остались на месте.</string>
+    <string name="error_install_failed">Установка не удалась: %1$s</string>
+    <string name="error_install_no_game">В выбранном источнике нет game/default.xex. Выберите дамп, содержащий папки game, update и (опционально) dlc.</string>
+    <string name="error_install_no_mod">В выбранном источнике нет mod.ini — мод не найден.</string>
+
+    <string-array name="driver_labels">
+        <item>Авто (рекомендуется)</item><item>Системный</item><item>Встроенный Turnip</item><item>Adreno 710 (Vauzi)</item><item>A725 Performance (эксперимент; sysmem+nobin)</item><item>Импортированный</item>
+    </string-array>
+    <string-array name="render_mode_labels">
+        <item>Авто (рекомендуется)</item><item>GMEM</item><item>Sysmem</item>
+    </string-array>
+    <string-array name="touch_policy_labels">
+        <item>Авто</item><item>Всегда включены</item><item>Выключены</item>
+    </string-array>
+    <string-array name="touch_camera_labels">
+        <item>Свайп по экрану</item><item>Правый стик</item><item>Выключено</item>
+    </string-array>
+
+    <string name="documents_save_title">Сохранения Unleashed Recomp</string>
+    <string name="documents_save_summary">Данные сохранений (SYS-DATA) и сохранения модов</string>
+    <string name="launcher_open_saves">Открыть папку сохранений</string>
+    <string name="launcher_controls_moved">Экранные кнопки, камера и стик перенесены во внутриигровое меню опций (раздел «Управление»). Настраивайте их прямо в игре.</string>
+    <string name="launcher_force_bc">Форсировать нативные BC-текстуры (отключить ETC2-транскод; только для GPU с поддержкой BC)</string>
+    <string name="mod_manager_codes">Коды</string>
+    <string name="mod_manager_codes_hint">Встроенные патчи, применяемые при запуске. Сохраняются вместе со списком модов; для применения перезапустите игру.</string>
+    <string name="launcher_localization">Фанатская локализация</string>
+    <string name="launcher_localization_none">Нет (оригинальная игра)</string>
+    <string name="launcher_localization_summary">Выберите необязательный пакет из localizations/. Его файлы подменят ресурсы базового языка, не изменяя исходный дамп игры.</string>
+    <string name="launcher_updates">Обновления приложения</string>
+    <string name="update_current_version">Установлена версия: %1$s</string>
+    <string name="update_check">Проверить обновления</string>
+    <string name="update_checking">Проверяем обновления на GitHub…</string>
+    <string name="update_error">Не удалось проверить обновления: %1$s</string>
+    <string name="update_up_to_date">Установлена актуальная версия %1$s.</string>
+    <string name="update_up_to_date_short">У вас уже установлена последняя версия.</string>
+    <string name="update_available">Доступна версия %1$s.</string>
+    <string name="update_dialog_title">Доступно обновление</string>
+    <string name="update_dialog_message">Версия %1$s (%2$s) готова к загрузке.\n\n%3$s</string>
+    <string name="update_later">Позже</string>
+    <string name="update_download">Скачать</string>
+    <string name="update_downloading">Загрузка обновления…</string>
+    <string name="update_download_progress">Скачано %1$s из %2$s</string>
+    <string name="update_ready_to_install">Обновление скачано. Продолжите в системном установщике Android.</string>
+</resources>

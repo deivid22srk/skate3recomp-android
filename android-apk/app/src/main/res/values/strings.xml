@@ -1,0 +1,129 @@
+<resources>
+    <string name="app_name">UnleashedRecomp</string>
+    <string name="documents_game_title">Unleashed Recomp game files</string>
+    <string name="documents_game_summary">Active game, mods, configuration and saves</string>
+    <string name="documents_transfer_title">Unleashed Recomp transfers</string>
+    <string name="documents_transfer_summary">Mods, driver imports, logs and diagnostic captures</string>
+    <string name="mod_manager_launcher_name">Unleashed Mods</string>
+    <string name="mod_manager_title">Unleashed Mods</string>
+    <string name="mod_manager_hint">Copy each mod folder into the mods directory, refresh this list, enable mods and arrange their priority. Save writes the standard CPKREDIR database; restart the game to apply changes.</string>
+    <string name="mod_manager_open_files">Open Files</string>
+    <string name="mod_manager_refresh">Refresh</string>
+    <string name="mod_manager_save">Save mod list</string>
+    <string name="mod_manager_empty">No compatible mod.ini files found. Use Open mod folder, create mods/, then copy HMM or UMM mods into it.</string>
+    <string name="mod_manager_found">Found %1$d compatible mods.</string>
+    <string name="mod_manager_saved">Saved %1$d enabled mods in priority order.</string>
+    <string name="mod_manager_restart">Mod changes will apply after the game is restarted.</string>
+    <string name="mod_manager_error_directory">Cannot create configuration directory: %1$s</string>
+    <string name="mod_manager_error_save">Cannot save the mod database: %1$s</string>
+    <string name="mod_manager_error_files">Android Files could not be opened.</string>
+    <string name="mod_settings_title">Mod settings</string>
+    <string name="mod_settings_open">Configure %1$s</string>
+    <string name="mod_settings_save">Save mod settings</string>
+    <string name="mod_settings_saved">Mod settings saved. Restart the game to apply them.</string>
+    <string name="mod_settings_empty">This ConfigSchemaFile contains no supported settings.</string>
+    <string name="mod_settings_error">Could not edit mod settings: %1$s</string>
+
+    <string name="launcher_title">Unleashed Recomp</string>
+    <string name="launcher_subtitle">Check the installation and configure the game before launch.</string>
+    <string name="launcher_game_files">Game files</string>
+    <string name="launcher_open_files">Open game folder</string>
+    <string name="launcher_recheck">Check again</string>
+    <string name="launcher_graphics">Graphics driver</string>
+    <string name="launcher_driver">Vulkan driver</string>
+    <string name="launcher_render_mode">Turnip render mode</string>
+    <string name="launcher_import_driver">Import .so / .zip</string>
+    <string name="launcher_driver_folder">Driver folder</string>
+    <string name="launcher_controls">Controls</string>
+    <string name="launcher_touch_policy">On-screen controls</string>
+    <string name="launcher_touch_camera">Camera control</string>
+    <string name="launcher_edit_layout">Arrange touch controls</string>
+    <string name="launcher_mods">Mods</string>
+    <string name="launcher_mods_summary">Enable compatible HMM/UMM mods and set their priority.</string>
+    <string name="launcher_manage_mods">Manage mods</string>
+    <string name="launcher_debug">Debug options</string>
+    <string name="launcher_show_fps">Show FPS</string>
+    <string name="launcher_show_profiler">Show profiler overlay</string>
+    <string name="launcher_skip_intro">Skip intro logos</string>
+    <string name="launcher_validation">Vulkan synchronization validation (slow)</string>
+    <string name="launcher_gfx_capture">Record GFXReconstruct trace (very large and slow)</string>
+    <string name="launcher_open_logs">Open logs and captures</string>
+    <string name="launcher_play">Launch game</string>
+    <string name="launcher_driver_pending">%1$d driver package(s) will be installed on the next launch.</string>
+    <string name="launcher_driver_installed">Imported driver available: %1$s</string>
+    <string name="launcher_driver_builtin">Bundled Turnip drivers and the system driver are available. No imported driver found.</string>
+    <string name="launcher_driver_recovery">The previous Vulkan startup did not finish. Auto recovery will use a safer driver; choose System here if the problem repeats.</string>
+    <string name="launcher_log_found">Latest log found (%1$s).</string>
+    <string name="launcher_log_missing">No log yet. A log is created when the game starts.</string>
+    <string name="game_ready_all_dlc">Ready to launch. Base game, update and all DLC were detected.</string>
+    <string name="game_ready_missing_dlc">Ready to launch. Base game and update detected; DLC packs: %1$d of %2$d.</string>
+    <string name="error_title">Cannot continue</string>
+    <string name="error_storage_create">The app cannot create its storage folder:\n%1$s\n\nCheck free space and storage availability.</string>
+    <string name="error_storage_write">The game folder is not writable:\n%1$s\n\nIt may have been created by adb or another user. Delete it and let the app recreate it.</string>
+    <string name="error_game_missing">Game files are not installed. Copy the extracted Xbox 360 dump folders game, update and patched into:\n%1$s\n\nDo not copy an APK, PC game files or a shortcut.</string>
+    <string name="error_game_partial">The installation is incomplete or damaged. Missing required files:%1$s\n\nExpected root:\n%2$s</string>
+    <string name="error_game_nested">Game files appear to be nested in the wrong folder (%1$s). Move game, update, patched and optional dlc folders directly into:\n%2$s</string>
+    <string name="error_settings_save">Could not save settings: %1$s</string>
+    <string name="error_layout_editor">Could not start the layout editor: %1$s</string>
+    <string name="error_layout_requires_game">The layout editor uses the game renderer, so a valid game installation is required.</string>
+    <string name="error_driver_extension">Choose a plain Vulkan .so file or an AdrenoTools/ExynosTools .zip package.</string>
+    <string name="error_driver_copy">Could not import the driver: %1$s</string>
+    <string name="error_open_files">Android Files could not open the application folder.</string>
+    <string name="driver_imported">%1$s was copied. It will be validated and installed at game launch.</string>
+    <string name="launcher_install_game">Install game files (.zip / folder)</string>
+    <string name="launcher_install_mod">Install a mod (.zip / folder)</string>
+    <string name="install_source_zip">From a ZIP archive</string>
+    <string name="install_source_folder">From a folder</string>
+    <string name="install_source_iso_packages">From ISO / update / DLC packages</string>
+    <string name="install_progress_title">Installing…</string>
+    <string name="install_progress_status">%1$d files copied, %2$s</string>
+    <string name="install_scanning">Reading the source…</string>
+    <string name="install_cancel">Cancel</string>
+    <string name="install_done_game">Game files installed. The patched executable is prepared automatically on the first launch if needed.</string>
+    <string name="install_done_iso_staged">Installer packages staged. Tap Launch game to verify and install the base game, title update and optional DLC.</string>
+    <string name="launcher_install_staged">Installer packages are ready. Launch the game to verify and install them.</string>
+    <string name="install_done_mod">Installed mods: %1$d. Enable them in the mod manager.</string>
+    <string name="install_cancelled">Installation cancelled. Partially copied files were left in place.</string>
+    <string name="error_install_failed">Installation failed: %1$s</string>
+    <string name="error_install_no_game">The selected source does not contain game/default.xex. Choose the dump that holds the game, update and optional dlc folders.</string>
+    <string name="error_install_no_mod">The selected source does not contain a mod.ini, so no mod could be found in it.</string>
+
+    <string-array name="driver_labels">
+        <item>Auto (recommended)</item><item>System</item><item>Bundled Turnip</item><item>Adreno 710 (Vauzi)</item><item>A725 Performance (experimental; sysmem+nobin)</item><item>Imported</item>
+    </string-array>
+    <string-array name="render_mode_labels">
+        <item>Auto (recommended)</item><item>GMEM</item><item>Sysmem</item>
+    </string-array>
+    <string-array name="touch_policy_labels">
+        <item>Auto</item><item>Always on</item><item>Off</item>
+    </string-array>
+    <string-array name="touch_camera_labels">
+        <item>Swipe on screen</item><item>Right stick</item><item>Off</item>
+    </string-array>
+
+    <string name="documents_save_title">Unleashed Recomp saves</string>
+    <string name="documents_save_summary">Save data (SYS-DATA) and per-mod saves</string>
+    <string name="launcher_open_saves">Open saves folder</string>
+    <string name="launcher_controls_moved">On-screen controls, camera and stick moved to the in-game options menu (Input). Adjust them there while playing.</string>
+    <string name="launcher_force_bc">Force native BC textures (disable ETC2 transcode; only for GPUs that support BC)</string>
+    <string name="mod_manager_codes">Codes</string>
+    <string name="mod_manager_codes_hint">Built-in patches applied at boot. Saved with the mod list; restart the game to apply.</string>
+    <string name="launcher_localization">Fan localization</string>
+    <string name="launcher_localization_none">None (original game)</string>
+    <string name="launcher_localization_summary">Select an optional package from localizations/. Its files override the matching base-language resources without modifying the game dump.</string>
+    <string name="launcher_updates">Application updates</string>
+    <string name="update_current_version">Installed version: %1$s</string>
+    <string name="update_check">Check for updates</string>
+    <string name="update_checking">Checking GitHub for updates…</string>
+    <string name="update_error">Update check failed: %1$s</string>
+    <string name="update_up_to_date">Version %1$s is up to date.</string>
+    <string name="update_up_to_date_short">You already have the latest version.</string>
+    <string name="update_available">Version %1$s is available.</string>
+    <string name="update_dialog_title">Update available</string>
+    <string name="update_dialog_message">Version %1$s (%2$s) is ready to download.\n\n%3$s</string>
+    <string name="update_later">Later</string>
+    <string name="update_download">Download</string>
+    <string name="update_downloading">Downloading the update…</string>
+    <string name="update_download_progress">Downloaded %1$s of %2$s</string>
+    <string name="update_ready_to_install">Update downloaded. Continue in the Android installer.</string>
+</resources>
