@@ -103,24 +103,34 @@ jobs:
       - name: Patch rexglue-sdk Clang requirement for host-tools build
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
         run: |
-          # The rexglue-sdk CMakeLists.txt has a hard FATAL_ERROR if
-          # CMAKE_CXX_COMPILER_ID is not 'Clang'.  We're using GCC 14
-          # for the host-tools build because it has full C++23 support
-          # (std::expected).  Comment out the Clang requirement so GCC works.
-          # Use line numbers to avoid commenting out unrelated endif()s.
+          # The rexglue-sdk CMakeLists.txt has TWO Clang enforcement checks:
+          #   1. Compiler ID must be "Clang" (line ~79)
+          #   2. Compiler version must be >= 18.0 (line ~84)
+          # We're using GCC 14 for the host-tools build because it has full
+          # C++23 support (std::expected).  Comment out BOTH checks.
           SDK_CMAKE="third_party/rexglue-sdk/CMakeLists.txt"
-          # Find the line with the FATAL_ERROR about Clang
-          CLANG_ERR_LINE=$(grep -n 'message(FATAL_ERROR "ReXGlue requires Clang' "$SDK_CMAKE" | head -1 | cut -d: -f1)
-          if [ -n "$CLANG_ERR_LINE" ]; then
-            # The if() is 1 line before, endif() is 1 line after
-            IF_LINE=$((CLANG_ERR_LINE - 1))
-            ENDIF_LINE=$((CLANG_ERR_LINE + 1))
+          # Patch 1: "ReXGlue requires Clang compiler" (compiler ID check)
+          CLANG_ID_LINE=$(grep -n 'message(FATAL_ERROR "ReXGlue requires Clang compiler' "$SDK_CMAKE" | head -1 | cut -d: -f1)
+          if [ -n "$CLANG_ID_LINE" ]; then
+            IF_LINE=$((CLANG_ID_LINE - 1))
+            ENDIF_LINE=$((CLANG_ID_LINE + 1))
             sed -i "${IF_LINE}s/^/# /" "$SDK_CMAKE"
-            sed -i "${CLANG_ERR_LINE}s/^/# /" "$SDK_CMAKE"
+            sed -i "${CLANG_ID_LINE}s/^/# /" "$SDK_CMAKE"
             sed -i "${ENDIF_LINE}s/^/# /" "$SDK_CMAKE"
-            echo "Patched: Clang requirement at lines $IF_LINE-$ENDIF_LINE commented out"
-          else
-            echo "Clang requirement already disabled or not found"
+            echo "Patched: Clang ID check at lines $IF_LINE-$ENDIF_LINE"
+          fi
+          # Patch 2: "ReXGlue requires Clang 18 or newer" (version check)
+          CLANG_VER_LINE=$(grep -n 'message(FATAL_ERROR "ReXGlue requires Clang 18' "$SDK_CMAKE" | head -1 | cut -d: -f1)
+          if [ -n "$CLANG_VER_LINE" ]; then
+            IF_LINE=$((CLANG_VER_LINE - 1))
+            ENDIF_LINE=$((CLANG_VER_LINE + 1))
+            sed -i "${IF_LINE}s/^/# /" "$SDK_CMAKE"
+            sed -i "${CLANG_VER_LINE}s/^/# /" "$SDK_CMAKE"
+            sed -i "${ENDIF_LINE}s/^/# /" "$SDK_CMAKE"
+            echo "Patched: Clang version check at lines $IF_LINE-$ENDIF_LINE"
+          fi
+          if [ -z "$CLANG_ID_LINE" ] && [ -z "$CLANG_VER_LINE" ]; then
+            echo "Both Clang checks already disabled or not found"
           fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
