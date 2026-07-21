@@ -441,4 +441,45 @@ class AndroidNativeWindowSurface final : public Surface {
 H
 echo "::notice::$SURFACE_ANDROID_H written (AndroidNativeWindowSurface stub)"
 
+# 11. Patch thirdparty/CMakeLists.txt so FFmpeg AArch64 assembly objects
+#     are built with -fPIC on Android.  Without it, the resulting
+#     relocations are absolute (R_AARCH64_ADR_PREL_PG_HI21 / ADD_ABS_LO12_NC)
+#     and lld rejects them when linking liblibavcodec.a into the shared
+#     librexruntime.so:
+#       ld.lld: error: relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be
+#       used against symbol 'ff_cos_32'; recompile with -fPIC
+#     CMAKE_POSITION_INDEPENDENT_CODE ON (set globally at CMakeLists.txt:118)
+#     only applies -fPIC to C/C++ targets, NOT to ASM.  The existing
+#     `set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -march=armv8-a")` block
+#     in the ARM64 FFmpeg setup section needs -fPIC appended on Android.
+THIRDPARTY_CMAKE="$SDK_DIR/thirdparty/CMakeLists.txt"
+python3 - "$THIRDPARTY_CMAKE" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+old = """if(IS_ARM64)
+  enable_language(ASM)
+  set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -march=armv8-a")
+endif()"""
+new = """if(IS_ARM64)
+  enable_language(ASM)
+  set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -march=armv8-a")
+  # ASM sources need -fPIC explicitly on Android - CMAKE_POSITION_INDEPENDENT_CODE
+  # only injects -fPIC into C/C++ targets, not ASM.  Without it, lld rejects
+  # the absolute AArch64 relocations emitted by NEON .S files when linking
+  # liblibavcodec.a into the shared librexruntime.so.
+  if(ANDROID)
+    set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fPIC")
+  endif()
+endif()"""
+if "ASM sources need -fPIC explicitly on Android" in s:
+    print(f"::notice::{p} already has -fPIC for ASM on Android")
+elif old in s:
+    s = s.replace(old, new)
+    p.write_text(s)
+    print(f"::notice::{p} patched: -fPIC added to CMAKE_ASM_FLAGS on Android")
+else:
+    print(f"::warning::{p} ARM64 FFmpeg ASM block not found")
+PY
+
 echo "Patch complete."

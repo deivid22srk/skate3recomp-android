@@ -30,7 +30,7 @@ concurrency:
 
 env:
   NDK_VERSION: "29.0.14206865"
-  SDL2_VERSION: "release-2.30.6"
+  SDL2_VERSION: "release-2.32.4"
 
 jobs:
   build:
