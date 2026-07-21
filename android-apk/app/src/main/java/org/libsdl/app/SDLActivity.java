@@ -1875,6 +1875,165 @@ public class SDLActivity extends Activity implements View.OnSystemUiVisibilityCh
         }
         return 0;
     }
+
+    // =====================================================================
+    // Storage Access Framework (SAF) file picker
+    // =====================================================================
+    //
+    // Used by the native side via JNI to let the user pick a file (e.g.
+    // a Skate 3 ISO or title-update package) using Android's standard
+    // ACTION_OPEN_DOCUMENT picker.  The native side blocks on a future
+    // (see android_content_uri.cpp) and waits for the picker result.
+    //
+    // Thread safety: the request id, mutex, and result map are all
+    // static so the native thread and the UI thread can rendezvous
+    // even if SDLActivity is recreated (which shouldn't happen during
+    // a picker dialog, but better safe than sorry).
+
+    private static final int SAF_REQUEST_CODE = 0x5341;  // 'SA'
+    private static final String SAF_TAG = "SAF";
+
+    private static int sSafNextRequestId = 1;
+    private static final Object sSafLock = new Object();
+    private static String sSafPendingRequestId = null;
+    private static String sSafResultUri = null;
+
+    /**
+     * Opens the system file picker and blocks (from the native side)
+     * until the user selects a file or cancels.
+     *
+     * Called via JNI from android_content_uri.cpp::pickFileWithSAF().
+     *
+     * @param mimeTypeFilter  MIME type to filter by (e.g. "application/octet-stream"
+     *                        for any binary file).  Pass "&#42;/&#42;" (star-slash-star)
+     *                        for no filter.
+     * @param extensionFilters comma-separated list of extensions (e.g. ".iso,.ISO"),
+     *                        or empty string for no extension filter.  Used only
+     *                        for EXTRA_TITLE display since ACTION_OPEN_DOCUMENT
+     *                        cannot filter by extension directly.
+     * @param dialogTitle     title to display in the picker (may be empty).
+     * @return  the content&#58;// URI of the selected file, or empty string if the
+     *          user cancelled or an error occurred.
+     */
+    public static String pickFileWithSAF(String mimeTypeFilter,
+                                          String extensionFilters,
+                                          String dialogTitle) {
+        SDLActivity activity = mSingleton;
+        if (activity == null) {
+            Log.e(SAF_TAG, "pickFileWithSAF called but SDLActivity.mSingleton is null");
+            return "";
+        }
+
+        // Build the OPEN_DOCUMENT intent.  CATEGORY_OPENABLE restricts
+        // to files that can be opened as a stream (not directories).
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mimeTypeFilter != null && !mimeTypeFilter.isEmpty()
+                       ? mimeTypeFilter : "*/*");
+        if (extensionFilters != null && !extensionFilters.isEmpty()) {
+            // Optional: split extensions into EXTRA_MIME_TYPES-like hint.
+            // ACTION_OPEN_DOCUMENT doesn't accept extensions directly,
+            // so we only use this for the dialog title.
+            intent.putExtra(Intent.EXTRA_TITLE, dialogTitle);
+        } else if (dialogTitle != null && !dialogTitle.isEmpty()) {
+            intent.putExtra(Intent.EXTRA_TITLE, dialogTitle);
+        }
+
+        // Generate a unique request id and store it so onActivityResult
+        // can correlate the result back to this call.  We only allow
+        // one in-flight SAF request at a time (sSafPendingRequestId)
+        // because the picker is a modal UI.
+        String requestId;
+        synchronized (sSafLock) {
+            if (sSafPendingRequestId != null) {
+                Log.e(SAF_TAG, "pickFileWithSAF called while another picker is in-flight");
+                return "";
+            }
+            requestId = Integer.toString(sSafNextRequestId++);
+            sSafPendingRequestId = requestId;
+            sSafResultUri = null;
+        }
+
+        // Launch the picker from the UI thread (startActivityForResult
+        // must be called from the activity's main thread).
+        final Intent finalIntent = intent;
+        final int requestCode = SAF_REQUEST_CODE + Integer.parseInt(requestId);
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    activity.startActivityForResult(finalIntent, requestCode);
+                } catch (Exception e) {
+                    Log.e(SAF_TAG, "startActivityForResult failed: " + e.getMessage());
+                    synchronized (sSafLock) {
+                        sSafResultUri = "";
+                        sSafPendingRequestId = null;
+                        sSafLock.notifyAll();
+                    }
+                }
+            }
+        });
+
+        // Block the native thread until the result arrives.  The native
+        // caller (android_content_uri.cpp) wraps this in a 5-minute
+        // timeout, so even if onActivityResult never fires we won't
+        // deadlock forever - the native side will return "" after the
+        // timeout and the user can retry.
+        synchronized (sSafLock) {
+            while (sSafPendingRequestId != null
+                   && sSafPendingRequestId.equals(requestId)) {
+                try {
+                    sSafLock.wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    sSafResultUri = "";
+                    sSafPendingRequestId = null;
+                    return "";
+                }
+            }
+        }
+
+        String result = sSafResultUri;
+        sSafResultUri = null;
+        return result != null ? result : "";
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        // Check if this is a SAF picker result (requestCode in our range).
+        if (requestCode < SAF_REQUEST_CODE
+            || requestCode >= SAF_REQUEST_CODE + 1000) {
+            return;
+        }
+
+        String resultUri = "";
+        if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+            resultUri = data.getData().toString();
+            // Persist the URI permission so we can re-open the file later
+            // (e.g. when the runtime needs to mmap it).  FLAG_GRANT_READ_URI_PERMISSION
+            // is granted automatically by ACTION_OPEN_DOCUMENT but only for the
+            // lifetime of this process unless we persist it.
+            try {
+                getContentResolver().takePersistableUriPermission(
+                    data.getData(),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException e) {
+                // Some providers don't support persistable permissions; that's
+                // fine, we just can't re-open the file after process death.
+                Log.w(SAF_TAG, "Could not take persistable URI permission: " + e.getMessage());
+            }
+        } else {
+            Log.i(SAF_TAG, "SAF picker cancelled (resultCode=" + resultCode + ")");
+        }
+
+        synchronized (sSafLock) {
+            sSafResultUri = resultUri;
+            sSafPendingRequestId = null;
+            sSafLock.notifyAll();
+        }
+    }
 }
 
 /**
@@ -2127,165 +2286,6 @@ class SDLClipboardHandler implements
     @Override
     public void onPrimaryClipChanged() {
         SDLActivity.onNativeClipboardChanged();
-    }
-
-    // =====================================================================
-    // Storage Access Framework (SAF) file picker
-    // =====================================================================
-    //
-    // Used by the native side via JNI to let the user pick a file (e.g.
-    // a Skate 3 ISO or title-update package) using Android's standard
-    // ACTION_OPEN_DOCUMENT picker.  The native side blocks on a future
-    // (see android_content_uri.cpp) and waits for the picker result.
-    //
-    // Thread safety: the request id, mutex, and result map are all
-    // static so the native thread and the UI thread can rendezvous
-    // even if SDLActivity is recreated (which shouldn't happen during
-    // a picker dialog, but better safe than sorry).
-
-    private static final int SAF_REQUEST_CODE = 0x5341;  // 'SA'
-    private static final String SAF_TAG = "SAF";
-
-    private static int sSafNextRequestId = 1;
-    private static final Object sSafLock = new Object();
-    private static String sSafPendingRequestId = null;
-    private static String sSafResultUri = null;
-
-    /**
-     * Opens the system file picker and blocks (from the native side)
-     * until the user selects a file or cancels.
-     *
-     * Called via JNI from android_content_uri.cpp::pickFileWithSAF().
-     *
-     * @param mimeTypeFilter  MIME type to filter by (e.g. "application/octet-stream"
-     *                        for any binary file).  Pass "&#42;/&#42;" (star-slash-star)
-     *                        for no filter.
-     * @param extensionFilters comma-separated list of extensions (e.g. ".iso,.ISO"),
-     *                        or empty string for no extension filter.  Used only
-     *                        for EXTRA_TITLE display since ACTION_OPEN_DOCUMENT
-     *                        cannot filter by extension directly.
-     * @param dialogTitle     title to display in the picker (may be empty).
-     * @return  the content&#58;// URI of the selected file, or empty string if the
-     *          user cancelled or an error occurred.
-     */
-    public static String pickFileWithSAF(String mimeTypeFilter,
-                                          String extensionFilters,
-                                          String dialogTitle) {
-        SDLActivity activity = mSingleton;
-        if (activity == null) {
-            Log.e(SAF_TAG, "pickFileWithSAF called but SDLActivity.mSingleton is null");
-            return "";
-        }
-
-        // Build the OPEN_DOCUMENT intent.  CATEGORY_OPENABLE restricts
-        // to files that can be opened as a stream (not directories).
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType(mimeTypeFilter != null && !mimeTypeFilter.isEmpty()
-                       ? mimeTypeFilter : "*/*");
-        if (extensionFilters != null && !extensionFilters.isEmpty()) {
-            // Optional: split extensions into EXTRA_MIME_TYPES-like hint.
-            // ACTION_OPEN_DOCUMENT doesn't accept extensions directly,
-            // so we only use this for the dialog title.
-            intent.putExtra(Intent.EXTRA_TITLE, dialogTitle);
-        } else if (dialogTitle != null && !dialogTitle.isEmpty()) {
-            intent.putExtra(Intent.EXTRA_TITLE, dialogTitle);
-        }
-
-        // Generate a unique request id and store it so onActivityResult
-        // can correlate the result back to this call.  We only allow
-        // one in-flight SAF request at a time (sSafPendingRequestId)
-        // because the picker is a modal UI.
-        String requestId;
-        synchronized (sSafLock) {
-            if (sSafPendingRequestId != null) {
-                Log.e(SAF_TAG, "pickFileWithSAF called while another picker is in-flight");
-                return "";
-            }
-            requestId = Integer.toString(sSafNextRequestId++);
-            sSafPendingRequestId = requestId;
-            sSafResultUri = null;
-        }
-
-        // Launch the picker from the UI thread (startActivityForResult
-        // must be called from the activity's main thread).
-        final Intent finalIntent = intent;
-        final int requestCode = SAF_REQUEST_CODE + Integer.parseInt(requestId);
-        activity.runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    activity.startActivityForResult(finalIntent, requestCode);
-                } catch (Exception e) {
-                    Log.e(SAF_TAG, "startActivityForResult failed: " + e.getMessage());
-                    synchronized (sSafLock) {
-                        sSafResultUri = "";
-                        sSafPendingRequestId = null;
-                        sSafLock.notifyAll();
-                    }
-                }
-            }
-        });
-
-        // Block the native thread until the result arrives.  The native
-        // caller (android_content_uri.cpp) wraps this in a 5-minute
-        // timeout, so even if onActivityResult never fires we won't
-        // deadlock forever - the native side will return "" after the
-        // timeout and the user can retry.
-        synchronized (sSafLock) {
-            while (sSafPendingRequestId != null
-                   && sSafPendingRequestId.equals(requestId)) {
-                try {
-                    sSafLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    sSafResultUri = "";
-                    sSafPendingRequestId = null;
-                    return "";
-                }
-            }
-        }
-
-        String result = sSafResultUri;
-        sSafResultUri = null;
-        return result != null ? result : "";
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        // Check if this is a SAF picker result (requestCode in our range).
-        if (requestCode < SAF_REQUEST_CODE
-            || requestCode >= SAF_REQUEST_CODE + 1000) {
-            return;
-        }
-
-        String resultUri = "";
-        if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
-            resultUri = data.getData().toString();
-            // Persist the URI permission so we can re-open the file later
-            // (e.g. when the runtime needs to mmap it).  FLAG_GRANT_READ_URI_PERMISSION
-            // is granted automatically by ACTION_OPEN_DOCUMENT but only for the
-            // lifetime of this process unless we persist it.
-            try {
-                getContentResolver().takePersistableUriPermission(
-                    data.getData(),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (SecurityException e) {
-                // Some providers don't support persistable permissions; that's
-                // fine, we just can't re-open the file after process death.
-                Log.w(SAF_TAG, "Could not take persistable URI permission: " + e.getMessage());
-            }
-        } else {
-            Log.i(SAF_TAG, "SAF picker cancelled (resultCode=" + resultCode + ")");
-        }
-
-        synchronized (sSafLock) {
-            sSafResultUri = resultUri;
-            sSafPendingRequestId = null;
-            sSafLock.notifyAll();
-        }
     }
 }
 
