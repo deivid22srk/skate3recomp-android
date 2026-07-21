@@ -1418,4 +1418,116 @@ std::string PickFileWithSAF(const char* mime_type_filter,
         print(f"::warning::{p} Android filesystem block not found")
 PY
 
+# 21. Patch src/ui/rex_app.cpp to skip <gnu/libc-version.h> on Android.
+#     The header is GLIBC-specific and is not shipped by the Android NDK
+#     (Bionic libc doesn't have gnu_get_libc_version()).  Both the
+#     #include and the REXLOG_INFO call that uses it need to be guarded
+#     with #if !defined(__ANDROID__) so the file compiles on Android.
+#     On Android we log "Bionic" instead of the GLIBC version.
+REX_APP_CPP="$SDK_DIR/src/ui/rex_app.cpp"
+python3 - "$REX_APP_CPP" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "REX_ANDROID_NO_GLIBC_VERSION" in s:
+    print(f"::notice::{p} already patched for gnu/libc-version.h")
+else:
+    # 21a. Guard the #include <gnu/libc-version.h> block.
+    old_inc = """#if REX_PLATFORM_LINUX
+#include <gnu/libc-version.h>
+#include <sys/utsname.h>
+#endif"""
+    new_inc = """#if REX_PLATFORM_LINUX
+#include <sys/utsname.h>
+#if !defined(__ANDROID__)
+// REX_ANDROID_NO_GLIBC_VERSION: <gnu/libc-version.h> is GLIBC-specific
+// and not shipped by the Android NDK (Bionic has no gnu_get_libc_version).
+#include <gnu/libc-version.h>
+#endif
+#endif"""
+    # 21b. Guard the gnu_get_libc_version() call.
+    old_call = '  REXLOG_INFO("  glibc: {}", gnu_get_libc_version());'
+    new_call = """#if defined(__ANDROID__)
+  REXLOG_INFO("  libc: Bionic");
+#else
+  REXLOG_INFO("  glibc: {}", gnu_get_libc_version());
+#endif"""
+    changed = False
+    if old_inc in s:
+        s = s.replace(old_inc, new_inc)
+        changed = True
+    if old_call in s:
+        s = s.replace(old_call, new_call)
+        changed = True
+    if changed:
+        p.write_text(s)
+        print(f"::notice::{p} patched: gnu/libc-version.h guarded on Android")
+    else:
+        print(f"::warning::{p} gnu/libc-version.h block not found")
+PY
+
+# 22. Patch include/rex/ui/windowed_app.h to NOT force
+#     XE_UI_WINDOWED_APPS_IN_LIBRARY=1 on Android.  The forced value
+#     makes REX_DEFINE_APP register the Creator in a static map (the
+#     "multiple apps in one library" path), but windowed_app_main_sdl.cpp
+#     calls GetWindowedAppCreator() which only exists in the
+#     IN_LIBRARY=0 path.  Removing the forced #define lets the default
+#     (0, "separate executables" path) take effect, which is correct for
+#     the skate3 standalone app.
+WINDOWED_APP_H="$SDK_DIR/include/rex/ui/windowed_app.h"
+python3 - "$WINDOWED_APP_H" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+old = """#if REX_PLATFORM_ANDROID
+// Multiple apps in a single library instead of separate executables.
+#define XE_UI_WINDOWED_APPS_IN_LIBRARY 1
+#endif"""
+if "REX_ANDROID_NO_FORCED_IN_LIBRARY" in s:
+    print(f"::notice::{p} already patched (XE_UI_WINDOWED_APPS_IN_LIBRARY not forced on Android)")
+elif old in s:
+    new = """// REX_ANDROID_NO_FORCED_IN_LIBRARY: do NOT force
+// XE_UI_WINDOWED_APPS_IN_LIBRARY=1 on Android.  The forced value breaks
+// the standalone-app path (GetWindowedAppCreator free function) that
+// windowed_app_main_sdl.cpp depends on.  Android uses the default (0),
+// same as Linux/macOS desktop builds, so REX_DEFINE_APP generates the
+// free function as expected."""
+    s = s.replace(old, new)
+    p.write_text(s)
+    print(f"::notice::{p} patched: XE_UI_WINDOWED_APPS_IN_LIBRARY no longer forced on Android")
+else:
+    print(f"::warning::{p} Android IN_LIBRARY block not found")
+PY
+
+# 23. Patch src/ui/windowed_app_main_sdl.cpp to use SDL_main as the
+#     entry point on Android.  SDL2 on Android invokes SDL_main (via
+#     SDLActivity's JNI bridge), not the standard C main().  Without
+#     this rename, the entry point is never called and the app silently
+#     fails to start.
+WINDOWED_APP_MAIN_SDL="$SDK_DIR/src/ui/windowed_app_main_sdl.cpp"
+python3 - "$WINDOWED_APP_MAIN_SDL" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "REX_ANDROID_SDL_MAIN" in s:
+    print(f"::notice::{p} already patched for SDL_main")
+else:
+    old = "int main(int argc, char** argv) {"
+    new = """#if defined(__ANDROID__)
+// REX_ANDROID_SDL_MAIN: SDL2 on Android invokes SDL_main (via
+// SDLActivity's JNI bridge), not the standard C main().  Without this
+// rename the entry point is never called and the app silently fails.
+extern \"C\" int SDL_main(int argc, char** argv)
+#else
+int main(int argc, char** argv)
+#endif
+{"""
+    if old in s:
+        s = s.replace(old, new)
+        p.write_text(s)
+        print(f"::notice::{p} patched: main -> SDL_main on Android")
+    else:
+        print(f"::warning::{p} main() signature not found")
+PY
+
 echo "Patch complete."

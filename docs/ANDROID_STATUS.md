@@ -1,6 +1,6 @@
 # skate3recomp — Android Port Status
 
-**Last updated:** 2026-07-21 (commit pending, post-run #27)
+**Last updated:** 2026-07-21 (commit pending, post-run #34 — Rodada 3)
 
 This document tracks the current state of the Android port of
 [skate3recomp](https://github.com/mchughalex/skate3recomp).  It is
@@ -263,7 +263,23 @@ picker (`ACTION_OPEN_DOCUMENT` + `CATEGORY_OPENABLE`, API 19+).
 These are the technical obstacles that need to be resolved **after**
 `generated/` is supplied, in roughly the order they'll be encountered:
 
-1. **Vulkan runtime initialization**
+1. **`windowed_app_main_sdl.cpp` entry point wiring** (partially done)
+   - The `int main()` signature has been renamed to `extern "C" int
+     SDL_main()` on Android so SDL2's JNI bridge can invoke it.
+   - `XE_UI_WINDOWED_APPS_IN_LIBRARY` is no longer forced to 1 on
+     Android, so `REX_DEFINE_APP` generates the free
+     `GetWindowedAppCreator()` function as expected.
+   - **Still TODO**: `libmain.so` (the bootstrap library loaded by
+     SDLActivity) currently just `dlopen()`s `libskate3.so` without
+     calling `SDL_main`.  The bootstrap needs to be updated to either:
+     - Export `SDL_main` from `libskate3.so` directly (and have
+       SDLActivity dlopen libskate3 instead of libmain), or
+     - Have `libmain.so`'s `main()` call `SDL_main` from
+       `libskate3.so` via dlsym.
+   - This is untestable until `generated/` is supplied (without
+     `libskate3.so` real, there's no `SDL_main` to call).
+
+2. **Vulkan runtime initialization**
    - `librexruntime.so` links, but the runtime initialization path
      (`VkInstance` creation, `SDL_Vulkan_CreateSurface`, device
      selection, swapchain) has not been tested on Android
@@ -273,7 +289,7 @@ These are the technical obstacles that need to be resolved **after**
    - May need to vendor a recent Mesa Turnip driver (as
      UnleashedRecomp-Android does) for older devices
 
-2. **Touch / gamepad input mapping**
+3. **Touch / gamepad input mapping**
    - SDL2 maps touch to mouse by default — fine for UI clicks but
      not for skate gameplay (multiple buttons + analog sticks)
    - Will need either:
@@ -283,7 +299,7 @@ These are the technical obstacles that need to be resolved **after**
        `SDLControllerManager`, just needs UI to map buttons to
        Skate 3's XINPUT controller layout)
 
-3. **PPC→ARM recompilation performance**
+4. **PPC→ARM recompilation performance**
    - Even with `generated/` provided, the PPC guest code is
      recompiled at runtime by `rexruntime`.  Performance on Android
      arm64 phones (especially non-flagship) may be insufficient
@@ -292,7 +308,7 @@ These are the technical obstacles that need to be resolved **after**
      Xenos GPU; the bottleneck is more likely CPU-side (PPC guest
      instruction dispatch)
 
-4. **Game data installation**
+5. **Game data installation**
    - Even with `generated/` for codegen, the runtime needs the
      actual game files (`default.xex`, `default.xexp`, asset
      packages) at runtime
