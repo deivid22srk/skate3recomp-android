@@ -153,109 +153,120 @@ inline int GetAndroidApiLevel() {
 H
 echo "::notice::$MAIN_ANDROID_H written (GetAndroidApiLevel stub)"
 
-# 6. Provide a ucontext.h shim.  The Android NDK does not ship ucontext.h
-#    (deprecated since API 21), but rexglue-sdk's fiber_posix.cpp and
-#    thread/fiber.h unconditionally #include <ucontext.h> on REX_PLATFORM_LINUX
-#    (which is also defined on Android).  The shim declares the API surface
-#    needed by fiber_posix.cpp; functions are left undefined so any actual
-#    fiber usage will fail at link time (acceptable for the current stub
-#    build phase - the real recomp runtime isn't shipped yet).
-COMPAT_DIR="$SDK_DIR/thirdparty/android_compat"
-mkdir -p "$COMPAT_DIR"
-UCONTEXT_H="$COMPAT_DIR/ucontext.h"
-cat > "$UCONTEXT_H" <<'H'
-// SPDX-License-Identifier: BSD-3-Clause
-// Minimal ucontext.h shim for Android NDK builds of rexglue-sdk.
-//
-// The Android NDK does not ship <ucontext.h>.  We declare just enough of
-// the type and function surface for rexglue-sdk's fiber_posix.cpp to
-// compile; the functions are not implemented, so any runtime use of the
-// Fiber primitive will fail to link.  This is acceptable for the Android
-// port's current "make CI green" phase - the full recomp runtime still
-// needs the codegen sources to be supplied separately.
-#pragma once
-
-#include <cstddef>
-#include <cstdint>
-
-extern "C" {
-
-typedef struct mcontext_t {
-    uint64_t gregs[32];
-} mcontext_t;
-
-typedef struct ucontext_t {
-    uint64_t uc_flags;
-    struct ucontext_t* uc_link;
-    void* uc_stack;
-    mcontext_t uc_mcontext;
-    uint64_t uc_sigmask[16];
-} ucontext_t;
-
-typedef void (*__ucontext_func_t)(void);
-
-int getcontext(ucontext_t* ucp);
-int setcontext(const ucontext_t* ucp);
-void makecontext(ucontext_t* ucp, void (*func)(void), int argc, ...);
-int swapcontext(ucontext_t* oucp, const ucontext_t* ucp);
-
-}  // extern "C"
-H
-echo "::notice::$UCONTEXT_H written (ucontext shim)"
-
-# 7. Patch src/core/CMakeLists.txt so rexcore picks up the ucontext shim
-#    include directory on Android.
+# 6. Drop fiber_posix.cpp and exception_handler_posix.cpp from rexcore on
+#    Android.  Both #include <ucontext.h>, which the NDK ships at
+#    <sys/ucontext.h> with incompatible typedefs (sigcontext-based
+#    mcontext_t, struct ucontext ucontext_t).  Providing our own shim
+#    conflicts with the NDK's.  exception_handler_posix.cpp additionally
+#    uses x86_64-only REG_RIP/REG_RAX/... which don't exist on arm64.
+#    Both files implement non-essential primitives for the current stub
+#    build phase, so the simplest path is to exclude them.
 CORE_CMAKE="$SDK_DIR/src/core/CMakeLists.txt"
 python3 - "$CORE_CMAKE" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
-marker = "android_compat"
-if marker in s:
-    print(f"::notice::{p} already has android_compat include")
+if "list(REMOVE_ITEM rexcore" in s and "fiber_posix.cpp" in s:
+    print(f"::notice::{p} already excludes fiber/exception_handler on Android")
 else:
     addition = """
-# Android: ucontext.h is not shipped by the NDK; provide a shim.
+# Android: drop sources that depend on ucontext.h or x86_64-only regs.
 if(ANDROID)
-    target_include_directories(rexcore PRIVATE
-        ${PROJECT_SOURCE_DIR}/thirdparty/android_compat)
+    list(REMOVE_ITEM rexcore
+        fiber_posix.cpp
+        exception_handler_posix.cpp
+    )
 endif()
 """
-    anchor = "target_include_directories(rexcore PRIVATE\n    ${PROJECT_SOURCE_DIR}\n    ${PROJECT_SOURCE_DIR}/thirdparty/cli11/include\n)"
-    if anchor in s:
-        s = s.replace(anchor, anchor + "\n" + addition)
-        p.write_text(s)
-        print(f"::notice::{p} patched: android_compat include added")
-    else:
-        s = s.rstrip() + "\n" + addition
-        p.write_text(s)
-        print(f"::warning::{p} anchor not found, appended android_compat block at end")
+    # Append near the end of file (after all target_* calls).
+    s = s.rstrip() + "\n" + addition
+    p.write_text(s)
+    print(f"::notice::{p} patched: fiber_posix.cpp + exception_handler_posix.cpp excluded on Android")
 PY
 
-# 8. Patch src/core/memory_posix.cpp: replace <linux/ashmem.h> (also missing
-#    from the NDK) with inline definitions of the constants it actually uses.
+# 7. Patch src/core/memory_posix.cpp: replace <linux/ashmem.h> (missing
+#    from the NDK) with inline definitions of the constants it actually
+#    uses, and add the missing #include <rex/main_android.h>.
 MEM_POSIX="$SDK_DIR/src/core/memory_posix.cpp"
 python3 - "$MEM_POSIX" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
-old = '#include <linux/ashmem.h>'
-new = '''// <linux/ashmem.h> is not shipped by the Android NDK; define the few
-// constants memory_posix.cpp actually uses inline.
+
+# 7a. Replace <linux/ashmem.h> with inline constants.  Use #undef first
+#     to avoid redefinition warnings against <asm-generic/ioctl.h>.
+old_ashmem = '#include <linux/ashmem.h>'
+new_ashmem = '''// <linux/ashmem.h> is not shipped by the Android NDK; define the few
+// constants memory_posix.cpp actually uses inline.  _IOWR is already
+// provided by <asm-generic/ioctl.h> (via <sys/ioctl.h>), so we only
+// define the ashmem-specific ioctls on top of it.
 #include <sys/ioctl.h>
+#ifndef ASHMEM_NAME_LEN
 #define ASHMEM_NAME_LEN 256
+#endif
+#ifndef ASHMEM_NAME_DEF
 #define ASHMEM_NAME_DEF "ashmem"
-#define _IOWR(__type, __nr, __size) _IOC(_IOC_READ|_IOC_WRITE, (__type), (__nr), sizeof(__size))
+#endif
+#ifndef ASHMEM_SET_NAME
 #define ASHMEM_SET_NAME _IOWR(0x98, 1, char[ASHMEM_NAME_LEN])
-#define ASHMEM_SET_SIZE _IOWR(0x98, 3, size_t)'''
-if '_IOWR(0x98, 1, char[ASHMEM_NAME_LEN])' in s:
+#endif
+#ifndef ASHMEM_SET_SIZE
+#define ASHMEM_SET_SIZE _IOWR(0x98, 3, size_t)
+#endif'''
+if 'ASHMEM_SET_NAME _IOWR(0x98, 1, char[ASHMEM_NAME_LEN])' in s:
     print(f"::notice::{p} already has ashmem constants inlined")
-elif old in s:
-    s = s.replace(old, new)
-    p.write_text(s)
+elif old_ashmem in s:
+    s = s.replace(old_ashmem, new_ashmem)
     print(f"::notice::{p} patched: ashmem.h replaced with inline constants")
 else:
     print(f"::warning::{p} ashmem.h include not found")
+
+# 7b. Add #include <rex/main_android.h> near the top of the Android block.
+old_inc = '// #include "xenia/base/main_android.h"'
+new_inc = '''// #include "xenia/base/main_android.h"
+#include <rex/main_android.h>'''
+if '#include <rex/main_android.h>' in s:
+    print(f"::notice::{p} already includes rex/main_android.h")
+elif old_inc in s:
+    s = s.replace(old_inc, new_inc)
+    print(f"::notice::{p} patched: added #include <rex/main_android.h>")
+else:
+    print(f"::warning::{p} xenia main_android comment not found")
+
+p.write_text(s)
+PY
+
+# 8. Patch src/core/threading_posix.cpp: PTHREAD_MUTEX_ROBUST and
+#    pthread_mutex_consistent are not available in Android's Bionic libc.
+#    Stub them out on Android (the rexglue code path that uses them is
+#    for crash-recovery of held mutexes, which is non-essential for the
+#    current stub build phase).
+THREAD_POSIX="$SDK_DIR/src/core/threading_posix.cpp"
+python3 - "$THREAD_POSIX" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "REX_ANDROID_NO_ROBUST_MUTEX" in s:
+    print(f"::notice::{p} already has Android robust-mutex stub")
+else:
+    # 8a. Wrap the setrobust call site.  Original:
+    #       if (pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) == 0) {
+    #     The `if (...)` header must remain valid C++ on both branches, so
+    #     we keep the `if (` and `{` outside the #if and only guard the
+    #     condition expression.  On Android the condition collapses to
+    #     `0 == 0` (false), so the body is skipped at runtime.
+    s = s.replace(
+        "if (pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) == 0) {",
+        "#if defined(__ANDROID__)\n      if (false) {  // REX_ANDROID_NO_ROBUST_MUTEX: robust mutexes unavailable in Bionic\n#else\n      if (pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) == 0) {\n#endif"
+    )
+    # 8b. Wrap the two pthread_mutex_consistent() calls.  These are
+    #     statement expressions; we can simply #if them out on Android.
+    s = s.replace(
+        "pthread_mutex_consistent(native_mutex);",
+        "#if !defined(__ANDROID__)\n      pthread_mutex_consistent(native_mutex);\n#endif"
+    )
+    p.write_text(s)
+    print(f"::notice::{p} patched: robust-mutex calls guarded on Android (REX_ANDROID_NO_ROBUST_MUTEX)")
 PY
 
 # 9. Link libandroid on Android (needed for ASharedMemory_create and the

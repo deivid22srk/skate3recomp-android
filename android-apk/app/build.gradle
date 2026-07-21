@@ -49,6 +49,15 @@ android {
             }
         }
     }
+    // Point AGP at our jni/Android.mk (default is src/main/jni/Android.mk,
+    // which we don't have - so without this, AGP silently skips ndk-build
+    // and libmain.so never gets packaged, causing SDLActivity to crash at
+    // startup with "dlopen failed: library 'libmain.so' not found").
+    externalNativeBuild {
+        ndkBuild {
+            path "jni/Android.mk"
+        }
+    }
     // libskate3.so is built by the project's own CMake pipeline (see
     // .github/workflows/build.yml) and copied into
     // src/main/jniLibs/arm64-v8a/ before Gradle runs; Gradle's own
