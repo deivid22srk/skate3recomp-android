@@ -966,10 +966,13 @@ cat > "$FS_ANDROID_CPP" <<'CPP'
 #include <jni.h>
 #include <android/log.h>
 
-// Forward-declare SDL_GetJavaVM() so we don't need to pull in SDL_system.h
-// here.  The actual symbol is provided by libSDL2.so at link time.
+// Forward-declare SDL3's Android JNI accessor so we don't need to pull
+// in SDL_system.h here.  The actual symbol is provided by the vendored
+// libSDL3.a at link time.  (SDL2 has SDL_GetJavaVM() that returns a
+// JavaVM*; SDL3 changed this to SDL_GetAndroidJNIEnv() returning a
+// JNIEnv* directly, which is even simpler for our use case.)
 extern "C" {
-void* SDL_GetJavaVM(void);
+void* SDL_GetAndroidJNIEnv(void);
 }
 
 #define TAG "skate3-fs"
@@ -991,6 +994,11 @@ bool IsAndroidContentUri(std::string_view source) {
 // Returns nullptr if the JVM could not be obtained or the thread could
 // not be attached.  When attached successfully, the caller MUST call
 // DetachCurrentThread before returning (we use a RAII guard).
+//
+// We obtain the JavaVM* once from SDL_GetAndroidJNIEnv() (which returns
+// the JNIEnv* of SDL's main thread), then use JavaVM->GetEnv /
+// AttachCurrentThread on each calling thread.  This works because all
+// JNIEnv*s from the same JavaVM share the same JVM.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1015,10 +1023,19 @@ struct JNIEnvGuard {
 };
 
 JavaVM* GetJavaVM() {
-  // SDL2 stores the JavaVM pointer in a static; we can fetch it via
-  // SDL_GetJavaVM() (declared above, provided by libSDL2.so).
-  void* vm = SDL_GetJavaVM();
-  return reinterpret_cast<JavaVM*>(vm);
+  // SDL3 provides SDL_GetAndroidJNIEnv() which returns the JNIEnv* of
+  // SDL's main thread.  We extract the JavaVM* from it once; this is
+  // safe because all JNIEnv*s from the same JavaVM share the same JVM.
+  JNIEnv* mainEnv = reinterpret_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+  if (!mainEnv) {
+    return nullptr;
+  }
+  JavaVM* vm = nullptr;
+  jint rc = mainEnv->GetJavaVM(&vm);
+  if (rc != JNI_OK) {
+    return nullptr;
+  }
+  return vm;
 }
 
 }  // namespace

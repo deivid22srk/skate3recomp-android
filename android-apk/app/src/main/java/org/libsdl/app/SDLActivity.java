@@ -2158,13 +2158,14 @@ class SDLClipboardHandler implements
      * Called via JNI from android_content_uri.cpp::pickFileWithSAF().
      *
      * @param mimeTypeFilter  MIME type to filter by (e.g. "application/octet-stream"
-     *                        for any binary file).  Pass "*/*" for no filter.
+     *                        for any binary file).  Pass "&#42;/&#42;" (star-slash-star)
+     *                        for no filter.
      * @param extensionFilters comma-separated list of extensions (e.g. ".iso,.ISO"),
      *                        or empty string for no extension filter.  Used only
      *                        for EXTRA_TITLE display since ACTION_OPEN_DOCUMENT
      *                        cannot filter by extension directly.
      * @param dialogTitle     title to display in the picker (may be empty).
-     * @return  the content:// URI of the selected file, or empty string if the
+     * @return  the content&#58;// URI of the selected file, or empty string if the
      *          user cancelled or an error occurred.
      */
     public static String pickFileWithSAF(String mimeTypeFilter,
