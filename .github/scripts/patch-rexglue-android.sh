@@ -161,27 +161,93 @@ echo "::notice::$MAIN_ANDROID_H written (GetAndroidApiLevel stub)"
 #    uses x86_64-only REG_RIP/REG_RAX/... which don't exist on arm64.
 #    Both files implement non-essential primitives for the current stub
 #    build phase, so the simplest path is to exclude them.
+#
+#    Note: list(REMOVE_ITEM) cannot be used here because rexcore is an
+#    OBJECT library whose sources are consumed by add_library() at line 4.
+#    Instead, we split the existing elseif(UNIX) target_sources() block
+#    so that on Android we add a stub list without the two offending files.
 CORE_CMAKE="$SDK_DIR/src/core/CMakeLists.txt"
 python3 - "$CORE_CMAKE" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
 s = p.read_text()
-if "list(REMOVE_ITEM rexcore" in s and "fiber_posix.cpp" in s:
-    print(f"::notice::{p} already excludes fiber/exception_handler on Android")
+if "REX_ANDROID_CORE_POSIX_SOURCES" in s:
+    print(f"::notice::{p} already has Android-specific core posix sources split")
 else:
-    addition = """
-# Android: drop sources that depend on ucontext.h or x86_64-only regs.
-if(ANDROID)
-    list(REMOVE_ITEM rexcore
-        fiber_posix.cpp
+    # Original block:
+    #   elseif(UNIX)
+    #       target_sources(rexcore PRIVATE
+    #           atomic_posix.cpp
+    #           ... (17 files including exception_handler_posix.cpp and fiber_posix.cpp)
+    #           threading_posix.cpp
+    #       )
+    old_block = """elseif(UNIX)
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp
+        clock_posix.cpp
+        dbg_posix.cpp
+        dynlib_posix.cpp
         exception_handler_posix.cpp
+        filesystem_posix.cpp
+        fiber_posix.cpp
+        mapped_memory_posix.cpp
+        math_gcc.cpp
+        memory_posix.cpp
+        seh_posix.cpp
+        socket_posix.cpp
+        string_posix.cpp
+        system_posix.cpp
+        threading_posix.cpp
     )
-endif()
-"""
-    # Append near the end of file (after all target_* calls).
-    s = s.rstrip() + "\n" + addition
-    p.write_text(s)
-    print(f"::notice::{p} patched: fiber_posix.cpp + exception_handler_posix.cpp excluded on Android")
+endif()"""
+    new_block = """elseif(UNIX AND NOT ANDROID)
+    # Full POSIX source set - requires ucontext.h (for fibers) and
+    # x86_64-only register macros (for exception_handler).
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp
+        clock_posix.cpp
+        dbg_posix.cpp
+        dynlib_posix.cpp
+        exception_handler_posix.cpp
+        filesystem_posix.cpp
+        fiber_posix.cpp
+        mapped_memory_posix.cpp
+        math_gcc.cpp
+        memory_posix.cpp
+        seh_posix.cpp
+        socket_posix.cpp
+        string_posix.cpp
+        system_posix.cpp
+        threading_posix.cpp
+    )
+elseif(ANDROID)
+    # REX_ANDROID_CORE_POSIX_SOURCES: reduced POSIX source set for Android.
+    # - fiber_posix.cpp excluded: <ucontext.h> not in NDK, conflicts with
+    #   sys/ucontext.h's typedefs.
+    # - exception_handler_posix.cpp excluded: uses x86_64-only REG_RIP /
+    #   REG_RAX / ... which don't exist on arm64.
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp
+        clock_posix.cpp
+        dbg_posix.cpp
+        dynlib_posix.cpp
+        filesystem_posix.cpp
+        mapped_memory_posix.cpp
+        math_gcc.cpp
+        memory_posix.cpp
+        seh_posix.cpp
+        socket_posix.cpp
+        string_posix.cpp
+        system_posix.cpp
+        threading_posix.cpp
+    )
+endif()"""
+    if old_block in s:
+        s = s.replace(old_block, new_block)
+        p.write_text(s)
+        print(f"::notice::{p} patched: split elseif(UNIX) into UNIX-NOT-ANDROID + ANDROID branches")
+    else:
+        print(f"::warning::{p} could not find elseif(UNIX) target_sources block to split")
 PY
 
 # 7. Patch src/core/memory_posix.cpp: replace <linux/ashmem.h> (missing
