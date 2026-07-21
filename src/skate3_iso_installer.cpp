@@ -27,6 +27,14 @@
 
 #include <rex/ui/window_win.h>
 #elif defined(__APPLE__)
+#elif defined(__ANDROID__)
+// STUB Android: no GTK on Android.  The ISO install wizard UI is
+// provided by the rexglue-sdk ImGui-based overlay (see
+// install_wizard_overlay.h) instead of a native file picker, so the
+// GTK branch below is not needed.  PickIsoFile() returns an empty
+// path on Android - callers (ShowRexglueIsoInstallWizard /
+// RunRexglueIsoInstallWizardBlocking) treat that as "user cancelled"
+// and surface the install wizard overlay instead.
 #else
 #include <gtk/gtk.h>
 #endif
@@ -103,6 +111,14 @@ std::filesystem::path PickIsoFile() {
 #elif defined(__APPLE__)
 std::filesystem::path PickIsoFile() {
   return skate3::PickIsoFileMacOS();
+}
+#elif defined(__ANDROID__)
+// STUB Android: no native file picker (GTK not available).  Returning
+// an empty path makes the caller fall through to the rexglue-sdk
+// ImGui-based install wizard overlay, which lets the user pick the ISO
+// via on-screen UI instead of a native dialog.
+std::filesystem::path PickIsoFile() {
+  return {};
 }
 #else
 std::filesystem::path PickIsoFile() {
