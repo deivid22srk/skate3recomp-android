@@ -629,4 +629,435 @@ endif()"""
         print(f"::warning::{p} could not find libavutil/libavcodec ARM64 source blocks")
 PY
 
+# 13. Patch include/rex/thread/fiber.h so the Android build of the
+#     Fiber struct does not depend on <ucontext.h> (which is shipped by
+#     the NDK with incompatible sigcontext-based typedefs).  The Android
+#     branch declares an empty struct layout; the implementation lives
+#     in fiber_android.cpp (also added by this patch script via a file
+#     write to src/core/).  At runtime the stub returns nullptr/false
+#     from all four member functions, so the empty layout is fine.
+FIBER_H="$SDK_DIR/include/rex/thread/fiber.h"
+python3 - "$FIBER_H" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "REX_PLATFORM_ANDROID" in s:
+    print(f"::notice::{p} already has Android branch")
+else:
+    old = """#if REX_PLATFORM_LINUX
+#include <ucontext.h>
+#include <cstdint>
+#include <vector>
+#elif REX_PLATFORM_MAC
+#include <cstdint>
+#include <vector>
+#endif"""
+    new = """#if REX_PLATFORM_ANDROID
+// STUB Android: Fiber is non-functional (no ucontext.h).  The struct
+// layout is intentionally empty - fiber_android.cpp returns nullptr /
+// no-ops from every member function, so no fields are needed.
+#include <cstdint>
+#elif REX_PLATFORM_LINUX
+#include <ucontext.h>
+#include <cstdint>
+#include <vector>
+#elif REX_PLATFORM_MAC
+#include <cstdint>
+#include <vector>
+#endif"""
+    if old in s:
+        s = s.replace(old, new)
+        p.write_text(s)
+        print(f"::notice::{p} patched: added Android branch (no ucontext.h)")
+    else:
+        print(f"::warning::{p} platform-include block not found")
+
+# Also wrap the Linux data members so they only appear on non-Android Linux.
+old2 = """#if REX_PLATFORM_WIN32
+  void* handle_ = nullptr;
+  bool is_thread_fiber_ = false;
+#elif REX_PLATFORM_LINUX
+  ucontext_t context_{};
+  std::vector<uint8_t> stack_;
+  void (*entry_)(void*) = nullptr;
+  void* arg_ = nullptr;
+  bool is_thread_fiber_ = false;
+
+  static void Trampoline();
+#elif REX_PLATFORM_MAC
+  void* context_ = nullptr;
+  std::vector<uint8_t> stack_;
+  void (*entry_)(void*) = nullptr;
+  void* arg_ = nullptr;
+  bool is_thread_fiber_ = false;
+
+  static void Trampoline();
+#endif"""
+new2 = """#if REX_PLATFORM_WIN32
+  void* handle_ = nullptr;
+  bool is_thread_fiber_ = false;
+#elif REX_PLATFORM_ANDROID
+  // STUB Android: no data members - all Fiber ops are no-ops.
+#elif REX_PLATFORM_LINUX
+  ucontext_t context_{};
+  std::vector<uint8_t> stack_;
+  void (*entry_)(void*) = nullptr;
+  void* arg_ = nullptr;
+  bool is_thread_fiber_ = false;
+
+  static void Trampoline();
+#elif REX_PLATFORM_MAC
+  void* context_ = nullptr;
+  std::vector<uint8_t> stack_;
+  void (*entry_)(void*) = nullptr;
+  void* arg_ = nullptr;
+  bool is_thread_fiber_ = false;
+
+  static void Trampoline();
+#endif"""
+if "REX_PLATFORM_ANDROID\n  // STUB Android: no data members" in s:
+    pass  # already done
+elif old2 in s:
+    s = s.replace(old2, new2)
+    p.write_text(s)
+    print(f"::notice::{p} patched: Android branch has no data members")
+else:
+    print(f"::warning::{p} data-member block not found")
+PY
+
+# 14. Add fiber_android.cpp to rexcore on Android.  Already added
+#     src/core/fiber_android.cpp via Write tool earlier in this patch
+#     script's lifetime - just make sure the CMakeLists.txt includes it.
+python3 - "$CORE_CMAKE" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "fiber_android.cpp" in s:
+    print(f"::notice::{p} already lists fiber_android.cpp")
+else:
+    # Insert into the elseif(ANDROID) target_sources block added by patch #6.
+    anchor = """elseif(ANDROID)
+    # REX_ANDROID_CORE_POSIX_SOURCES: reduced POSIX source set for Android.
+    # - fiber_posix.cpp excluded: <ucontext.h> not in NDK, conflicts with
+    #   sys/ucontext.h's typedefs.
+    # - exception_handler_posix.cpp excluded: uses x86_64-only REG_RIP /
+    #   REG_RAX / ... which don't exist on arm64.
+    target_sources(rexcore PRIVATE
+        atomic_posix.cpp"""
+    addition = """elseif(ANDROID)
+    # REX_ANDROID_CORE_POSIX_SOURCES: reduced POSIX source set for Android.
+    # - fiber_posix.cpp excluded: <ucontext.h> not in NDK, conflicts with
+    #   sys/ucontext.h's typedefs.
+    # - exception_handler_posix.cpp excluded: uses x86_64-only REG_RIP /
+    #   REG_RAX / ... which don't exist on arm64.
+    target_sources(rexcore PRIVATE
+        fiber_android.cpp
+        exception_handler_android.cpp
+        filesystem_android.cpp
+        atomic_posix.cpp"""
+    if anchor in s:
+        s = s.replace(anchor, addition)
+        p.write_text(s)
+        print(f"::notice::{p} patched: fiber_android.cpp + exception_handler_android.cpp added to Android sources")
+    else:
+        print(f"::warning::{p} Android target_sources block not found")
+PY
+
+# 15. Add thirdparty/FFmpeg/android_stubs.c to libavcodec on Android
+#     so the three undefined AArch64 dispatcher entry points
+#     (ff_float_dsp_init_aarch64, ff_fft_init_aarch64, ff_mpadsp_init_aarch64)
+#     resolve at link time.  See the file's header comment for why this
+#     is needed even after patches #11 and #12 excluded the .S and
+#     *_init_aarch64.c sources from the Android build.
+python3 - "$THIRDPARTY_CMAKE" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+if "FFmpeg/android_stubs.c" in s:
+    print(f"::notice::{p} already lists FFmpeg/android_stubs.c")
+else:
+    # Append after the libavcodec block (look for the elseif(ANDROID)
+    # branch added by patch #12).
+    anchor = """elseif(ANDROID)
+    # Android: skip ALL aarch64-specific codec sources (the .S NEON
+    # assembly plus the *_init_aarch64.c dispatch shims).  Both
+    # fft_init_aarch64.c and mpegaudiodsp_init.c declare extern NEON
+    # symbols and assign them to codec context vtables - including
+    # them without the .S files produces "undefined symbol: ff_*_neon"
+    # link errors (verified in run #19, commit 7eb57fd).
+    #
+    # With none of these sources compiled, libavcodec falls back to
+    # the generic C implementations in libavcodec/fft_template.c,
+    # libavcodec/mpegaudiodsp.c, etc.
+    target_compile_definitions(libavcodec PRIVATE
+        HAVE_NEON=0
+        HAVE_ARMV8=1
+        HAVE_INLINE_ASM=0
+    )
+endif()"""
+    addition = anchor.replace(
+        "    )\nendif()",
+        "    )\n    # Provide no-op stubs for the three AArch64 dispatcher entry\n    # points that the generic FFmpeg sources still call under\n    # `if (ARCH_AARCH64)` (which is hard-defined to 1 in\n    # config_android_aarch64.h).  Without these stubs the link of\n    # librexruntime.so fails with:\n    #   undefined symbol: ff_float_dsp_init_aarch64\n    #   undefined symbol: ff_fft_init_aarch64\n    #   undefined symbol: ff_mpadsp_init_aarch64\n    target_sources(libavcodec PRIVATE\n        ${FFMPEG_DIR}/android_stubs.c\n    )\nendif()"
+    )
+    if anchor in s:
+        s = s.replace(anchor, addition)
+        p.write_text(s)
+        print(f"::notice::{p} patched: FFmpeg/android_stubs.c added to libavcodec on Android")
+    else:
+        print(f"::warning::{p} libavcodec ANDROID block not found")
+PY
+
+# 16. Generate src/core/fiber_android.cpp (STUB Android Fiber impl).
+FIBER_ANDROID_CPP="$SDK_DIR/src/core/fiber_android.cpp"
+cat > "$FIBER_ANDROID_CPP" <<'CPP'
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// STUB Android: rex::thread::Fiber — non-functional on Android.
+//
+// The full Fiber implementation in fiber_posix.cpp depends on ucontext.h
+// (getcontext/makecontext/swapcontext), which the Android NDK does not
+// ship with usable typedefs (sys/ucontext.h declares mcontext_t /
+// ucontext_t as sigcontext-based, incompatible with the host-side fiber
+// layout the SDK expects).
+//
+// This stub provides the four member functions referenced by the
+// rexruntime call sites (xthread.cpp, kernel/crt/threading.cpp) so the
+// shared library links cleanly on Android.  At runtime, any attempt to
+// create or switch fibers will log an error and return nullptr/false —
+// the recomp runtime cannot actually run PPC guest code without fibers,
+// but the stub lets the APK install and the SDL window open so we can
+// validate the rest of the port pipeline.
+//
+// Before shipping a playable Android build, this file MUST be replaced
+// with a real implementation (e.g. vendoring libucontext, or rewriting
+// Fiber on top of pthread + sigaltstack + makecontext-like trampolines).
+
+#include <rex/platform.h>
+#include <rex/thread/fiber.h>
+
+#include <cstddef>
+#include <cstdio>
+
+namespace rex::thread {
+
+// Definition of the thread-local current-fiber pointer declared in fiber.h.
+// Always nullptr on Android since we never create real fibers.
+thread_local Fiber* Fiber::tls_current_ = nullptr;
+
+Fiber* Fiber::ConvertCurrentThread() {
+  // STUB Android: cannot convert thread to fiber without ucontext.
+  std::fprintf(stderr,
+               "[skate3recomp] STUB: Fiber::ConvertCurrentThread() "
+               "called on Android - fibers not implemented\n");
+  return nullptr;
+}
+
+Fiber* Fiber::Create(size_t /*stack_size*/, void (*/*entry*/)(void*),
+                     void* /*arg*/) {
+  // STUB Android: cannot create fiber without ucontext.
+  std::fprintf(stderr,
+               "[skate3recomp] STUB: Fiber::Create() called on Android - "
+               "fibers not implemented\n");
+  return nullptr;
+}
+
+void Fiber::SwitchTo(Fiber* /*target*/) {
+  // STUB Android: cannot switch fibers without ucontext.  No-op is safe
+  // because Create() returns nullptr - callers must not invoke SwitchTo
+  // with a non-null target if Create failed.
+  std::fprintf(stderr,
+               "[skate3recomp] STUB: Fiber::SwitchTo() called on Android - "
+               "fibers not implemented\n");
+}
+
+void Fiber::Destroy() {
+  // STUB Android: nothing to free; Fiber objects are never constructed
+  // because Create() and ConvertCurrentThread() both return nullptr.
+}
+
+}  // namespace rex::thread
+CPP
+echo "::notice::$FIBER_ANDROID_CPP written (Fiber stub)"
+
+# 17. Generate src/core/exception_handler_android.cpp (STUB Android
+#     ExceptionHandler impl).
+EXC_ANDROID_CPP="$SDK_DIR/src/core/exception_handler_android.cpp"
+cat > "$EXC_ANDROID_CPP" <<'CPP'
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// STUB Android: rex::arch::ExceptionHandler — crash recovery disabled.
+//
+// The full implementation in exception_handler_posix.cpp depends on
+// SIGSEGV/SIGBUS signal handlers and x86_64-only register macros
+// (REG_RIP, REG_RAX, ... in mcontext_t) that don't exist on arm64.  A
+// proper Android port would need to walk arm64's sigcontext to extract
+// PC, SP, X0..X30, etc., and is out of scope for the current "make CI
+// green" stub phase.
+//
+// This stub provides no-op Install / Uninstall so the shared library
+// links cleanly.  At runtime, MMIOHandler and any code that relies on
+// ExceptionHandler will not receive crash callbacks — they will get
+// the OS default behaviour (SIGSEGV → process termination) instead of
+// recovering.  This is acceptable for the current stub build because
+// the recomp runtime cannot actually run PPC guest code without fibers
+// (see fiber_android.cpp).
+//
+// Before shipping a playable Android build, this file MUST be replaced
+// with a real implementation based on arm64 sigaction / sigcontext.
+
+#include <rex/exception_handler.h>
+
+namespace rex::arch {
+
+void ExceptionHandler::Install(Handler /*fn*/, void* /*data*/) {
+  // STUB Android: crash recovery not implemented.
+}
+
+void ExceptionHandler::Uninstall(Handler /*fn*/, void* /*data*/) {
+  // STUB Android: symmetric no-op for Install above.
+}
+
+}  // namespace rex::arch
+CPP
+echo "::notice::$EXC_ANDROID_CPP written (ExceptionHandler stub)"
+
+# 18. Generate src/core/filesystem_android.cpp (STUB Android filesystem
+#     content-URI helpers).
+FS_ANDROID_CPP="$SDK_DIR/src/core/filesystem_android.cpp"
+cat > "$FS_ANDROID_CPP" <<'CPP'
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// STUB Android: rex::filesystem Android content-URI helpers.
+//
+// The upstream rexglue-sdk declares three Android-only entry points
+// in include/rex/filesystem.h:
+//
+//   void AndroidInitialize();
+//   void AndroidShutdown();
+//   bool IsAndroidContentUri(const std::string_view source);
+//   int  OpenAndroidContentFileDescriptor(const std::string_view uri,
+//                                          const char* mode);
+//
+// Of these, only AndroidInitialize / AndroidShutdown were implemented
+// (in src/core/memory_posix.cpp and src/core/threading_posix.cpp, in
+// their respective namespaces).  IsAndroidContentUri and
+// OpenAndroidContentFileDescriptor were never implemented, leaving
+// undefined-symbol link errors when librexruntime.so is built for
+// Android (verified in run #21, commit c512c5e):
+//
+//   ld.lld: error: undefined symbol:
+//     rex::filesystem::OpenAndroidContentFileDescriptor(...)
+//   >>> referenced by mapped_memory_posix.cpp:129
+//
+// This stub provides no-op / -1 implementations so the link succeeds.
+// At runtime:
+//   - IsAndroidContentUri() always returns false, so any caller that
+//     branches on a content:// URI will fall through to the regular
+//     file-path code path (which is correct for paths that aren't
+//     actually content URIs).
+//   - OpenAndroidContentFileDescriptor() returns -1 with errno=ENOSYS,
+//     signaling "not implemented".  Callers in mapped_memory_posix.cpp
+//     already check the return value and propagate the failure.
+//
+// Before shipping a playable Android build, this file MUST be replaced
+// with real implementations using Android's Storage Access Framework
+// (JNI calls into ContentResolver.openFileDescriptor()).
+
+#include <rex/platform.h>
+
+#if REX_PLATFORM_ANDROID
+
+#include <rex/filesystem.h>
+
+#include <cerrno>
+#include <string_view>
+
+namespace rex::filesystem {
+
+bool IsAndroidContentUri(std::string_view source) {
+  // STUB Android: real implementation should check for the
+  // "content://" prefix (or "file://" for SAF-derived URIs).
+  (void)source;
+  return false;
+}
+
+int OpenAndroidContentFileDescriptor(std::string_view /*uri*/,
+                                      const char* /*mode*/) {
+  // STUB Android: real implementation should call into Java via JNI:
+  //   ContentResolver cr = context.getContentResolver();
+  //   ParcelFileDescriptor pfd = cr.openFileDescriptor(uri, mode);
+  //   return pfd.detachFd();
+  errno = ENOSYS;
+  return -1;
+}
+
+}  // namespace rex::filesystem
+
+#endif  // REX_PLATFORM_ANDROID
+CPP
+echo "::notice::$FS_ANDROID_CPP written (filesystem stub)"
+
+# 19. Generate thirdparty/FFmpeg/android_stubs.c (STUB Android FFmpeg
+#     AArch64 dispatcher entry points).
+FFMPEG_STUBS_C="$SDK_DIR/thirdparty/FFmpeg/android_stubs.c"
+cat > "$FFMPEG_STUBS_C" <<'C'
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// STUB Android: FFmpeg AArch64 dispatcher entry points.
+//
+// The vendored FFmpeg ships AArch64 NEON-optimized inner loops in
+// libavcodec/aarch64/*.S and libavutil/aarch64/*.S, plus C dispatcher
+// shims (*_init_aarch64.c) that register NEON function pointers into
+// codec/util context vtables.  The rexglue-sdk build excludes both
+// from the Android target (see .github/scripts/patch-rexglue-android.sh
+// patch #12) because:
+//
+//   1. The .S files use hand-written adrp/add relocations that are
+//      non-PIC and cause lld to fail with R_AARCH64_ADR_PREL_PG_HI21
+//      when linking liblibavcodec.a into the shared librexruntime.so.
+//
+//   2. The *_init_aarch64.c shims declare extern NEON prototypes that
+//      become "undefined symbol" link errors when the .S files are
+//      excluded.
+//
+// However, the generic FFmpeg sources (fft_template.c, mpegaudiodsp.c,
+// float_dsp.c) still call ff_fft_init_aarch64() / ff_mpadsp_init_aarch64()
+// / ff_float_dsp_init_aarch64() inside `if (ARCH_AARCH64)` blocks, and
+// ARCH_AARCH64 is hard-defined to 1 in thirdparty/FFmpeg/config_android_aarch64.h.
+//
+// This file provides no-op implementations of those three dispatcher
+// entry points so the link succeeds.  At runtime:
+//   - The vtable slots in AVFloatDSPContext / FFTContext / MPADSPContext
+//     remain populated with the generic C fallbacks that FFmpeg's own
+//     _init() functions (ff_float_dsp_init, ff_fft_init, ff_mpdsp_init)
+//     already set before calling the aarch64 hook.
+//   - So audio decoding still works, just without NEON acceleration.
+//
+// Before shipping a playable Android build that needs NEON-accelerated
+// audio decode, this file MUST be replaced with real implementations.
+
+#include "libavutil/float_dsp.h"
+#include "libavcodec/fft.h"
+#include "libavcodec/mpegaudiodsp.h"
+
+// From libavutil/float_dsp.h: void ff_float_dsp_init_aarch64(AVFloatDSPContext *fdsp);
+void ff_float_dsp_init_aarch64(AVFloatDSPContext *fdsp) {
+  // STUB Android: no NEON dispatchers to register.
+  (void)fdsp;
+}
+
+// From libavcodec/fft.h: void ff_fft_init_aarch64(FFTContext *s);
+void ff_fft_init_aarch64(FFTContext *s) {
+  // STUB Android: no NEON dispatchers to register.
+  (void)s;
+}
+
+// From libavcodec/mpegaudiodsp.h: void ff_mpadsp_init_aarch64(MPADSPContext *s);
+void ff_mpadsp_init_aarch64(MPADSPContext *s) {
+  // STUB Android: no NEON dispatchers to register.
+  (void)s;
+}
+C
+echo "::notice::$FFMPEG_STUBS_C written (FFmpeg AArch64 dispatcher stubs)"
+
 echo "Patch complete."
