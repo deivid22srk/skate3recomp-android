@@ -113,7 +113,8 @@ jobs:
           cd android-apk/app/jni
           curl -sSL "https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL2_VERSION}.tar.gz" \
             | tar xz
-          mv "SDL-${SDL2_VERSION#release-}" SDL
+          # GitHub source archives extract as SDL-<tag-name>, e.g. SDL-release-2.30.6
+          mv SDL-release-* SDL
           ls -d SDL
 
       - name: Configure Android native build
