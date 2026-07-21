@@ -259,7 +259,9 @@ else:
 PY
 
 # 9. Link libandroid on Android (needed for ASharedMemory_create and the
-#    android_* activity symbols used elsewhere in the SDK).
+#    android_* activity symbols used elsewhere in the SDK).  Insert AFTER
+#    the existing `if(UNIX) ... elseif(WIN32) ... endif()` block so we
+#    don't break its flow control.
 python3 - "$CORE_CMAKE" <<'PY'
 import sys, pathlib
 p = pathlib.Path(sys.argv[1])
@@ -267,12 +269,21 @@ s = p.read_text()
 if "target_link_libraries(rexcore PRIVATE android)" in s:
     print(f"::notice::{p} already links libandroid")
 else:
-    old = "if(UNIX)\n    target_link_libraries(rexcore PRIVATE pthread dl)\n    if(NOT APPLE)\n        target_link_libraries(rexcore PRIVATE rt)\n    endif()"
+    old = """if(UNIX)
+    target_link_libraries(rexcore PRIVATE pthread dl)
+    if(NOT APPLE)
+        target_link_libraries(rexcore PRIVATE rt)
+    endif()
+elseif(WIN32)
+    target_link_libraries(rexcore PUBLIC ws2_32)
+endif()"""
     new = """if(UNIX)
     target_link_libraries(rexcore PRIVATE pthread dl)
     if(NOT APPLE)
         target_link_libraries(rexcore PRIVATE rt)
     endif()
+elseif(WIN32)
+    target_link_libraries(rexcore PUBLIC ws2_32)
 endif()
 if(ANDROID)
     target_link_libraries(rexcore PRIVATE android log)
@@ -282,7 +293,7 @@ endif()"""
         p.write_text(s)
         print(f"::notice::{p} patched: link libandroid + liblog on Android")
     else:
-        print(f"::warning::{p} UNIX link block not found, libandroid not added")
+        print(f"::warning::{p} UNIX/WIN32 link block not found, libandroid not added")
 PY
 
 echo "Patch complete."
