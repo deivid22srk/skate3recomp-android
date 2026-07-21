@@ -373,4 +373,32 @@ endif()"""
         print(f"::warning::{p} UNIX/WIN32 link block not found, libandroid not added")
 PY
 
+# 10. Patch src/ui/vulkan/vulkan_presenter.cpp: it #includes
+#     <rex/ui/surface_android.h> on Android, but the SDK only ships
+#     surface_sdl.h / surface_gnulinux.h / surface_win.h.  Since our
+#     patch #1 already makes Android use the SDL3 backend (same as
+#     Apple), redirect the Android include to surface_sdl.h.
+VULKAN_PRESENTER="$SDK_DIR/src/ui/vulkan/vulkan_presenter.cpp"
+python3 - "$VULKAN_PRESENTER" <<'PY'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+old = """#if REX_PLATFORM_ANDROID
+#include <rex/ui/surface_android.h>
+#endif"""
+new = """#if REX_PLATFORM_ANDROID
+// Android uses the SDL3 backend (see patch #1), so reuse the SDL surface
+// implementation rather than the never-shipped surface_android.h.
+#include <rex/ui/surface_sdl.h>
+#endif"""
+if 'surface_sdl.h>' in s and 'REX_PLATFORM_ANDROID' in s and 'surface_android.h' not in s:
+    print(f"::notice::{p} already redirected to surface_sdl.h on Android")
+elif old in s:
+    s = s.replace(old, new)
+    p.write_text(s)
+    print(f"::notice::{p} patched: surface_android.h -> surface_sdl.h on Android")
+else:
+    print(f"::warning::{p} surface_android.h include block not found")
+PY
+
 echo "Patch complete."
