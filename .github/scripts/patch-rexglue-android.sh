@@ -526,6 +526,12 @@ endif()"""
     new1 = """# ARM64 optimizations for libavutil
 # REX_ANDROID_FFMPEG_NO_ASM: skip NEON .S on Android - hand-written
 # adrp/add relocations are non-PIC and lld rejects them in shared links.
+# float_dsp_init.c also has to be excluded because it declares extern
+# prototypes for ff_vector_fmul_neon / ff_scalarproduct_float_neon / etc.
+# and assigns them into the AVFloatDSPContext vtable inside
+# `if (have_neon(cpu_flags))` - that path may be unreachable at runtime
+# with HAVE_NEON=0, but the symbols are still referenced at link time,
+# producing "undefined symbol: ff_*_neon" errors.
 if(IS_ARM64 AND NOT ANDROID)
     target_sources(libavutil PRIVATE
         ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
@@ -538,12 +544,12 @@ if(IS_ARM64 AND NOT ANDROID)
         HAVE_INLINE_ASM=1
     )
 elseif(ANDROID)
-    # Android: keep cpu.c + float_dsp_init.c (C-only init shims); skip
-    # the NEON .S; HAVE_NEON=0 forces FFmpeg to use its portable C
-    # fallbacks for float_dsp operations.
+    # Android: keep only cpu.c (CPU flags detection, no NEON externs).
+    # HAVE_NEON=0 + the absence of float_dsp_init.c makes FFmpeg's
+    # avutil fall back to the generic C float_dsp implementation in
+    # libavutil/float_dsp.c.
     target_sources(libavutil PRIVATE
         ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
-        ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_init.c
     )
     target_compile_definitions(libavutil PRIVATE
         HAVE_NEON=0
@@ -593,12 +599,16 @@ if(IS_ARM64 AND NOT ANDROID)
         HAVE_INLINE_ASM=1
     )
 elseif(ANDROID)
-    # Android: build only the C init shims; HAVE_NEON=0 forces FFmpeg to
-    # use its portable C fallbacks for FFT/MDCT/IDCT/etc.
-    target_sources(libavcodec PRIVATE
-        ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
-        ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
-    )
+    # Android: skip ALL aarch64-specific codec sources (the .S NEON
+    # assembly plus the *_init_aarch64.c dispatch shims).  Both
+    # fft_init_aarch64.c and mpegaudiodsp_init.c declare extern NEON
+    # symbols and assign them to codec context vtables - including
+    # them without the .S files produces "undefined symbol: ff_*_neon"
+    # link errors (verified in run #19, commit 7eb57fd).
+    #
+    # With none of these sources compiled, libavcodec falls back to
+    # the generic C implementations in libavcodec/fft_template.c,
+    # libavcodec/mpegaudiodsp.c, etc.
     target_compile_definitions(libavcodec PRIVATE
         HAVE_NEON=0
         HAVE_ARMV8=1
