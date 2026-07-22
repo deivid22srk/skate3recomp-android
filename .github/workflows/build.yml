@@ -148,6 +148,15 @@ jobs:
             sed -i 's/"ic"/"Ic"/g' "$MATHOPS_H"
             echo "Patched: FFmpeg mathops.h \"ic\" -> \"Ic\" for GCC 14"
           fi
+          # Patch 5: Fix GCC 14 section type conflict in ultrawide_debug.cpp.
+          # GCC 14 treats section type conflicts between thread_local and
+          # non-thread_local variables in the same TU as hard errors.
+          # Suppress with -Wno-section-type-conflict (GCC-only).
+          SDK_CMAKE_CORE="third_party/rexglue-sdk/CMakeLists.txt"
+          if ! grep -q 'section-type-conflict' "$SDK_CMAKE_CORE"; then
+            sed -i '/add_compile_options(/a\\    $<$<CXX_COMPILER_ID:GNU>:-Wno-section-type-conflict>' "$SDK_CMAKE_CORE"
+            echo "Patched: -Wno-section-type-conflict added for GCC"
+          fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
