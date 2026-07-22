@@ -152,9 +152,13 @@ jobs:
           # GCC 14 treats section type conflicts between thread_local and
           # non-thread_local variables in the same TU as hard errors.
           # Suppress with -Wno-section-type-conflict (GCC-only).
+          # Insert INSIDE the add_compile_options() block, after the
+          # last existing entry, with proper comma separator.
           SDK_CMAKE_CORE="third_party/rexglue-sdk/CMakeLists.txt"
           if ! grep -q 'section-type-conflict' "$SDK_CMAKE_CORE"; then
-            sed -i '/add_compile_options(/a\\    $<$<CXX_COMPILER_ID:GNU>:-Wno-section-type-conflict>' "$SDK_CMAKE_CORE"
+            # Find the line with "-fno-char8_t" (last entry in the block)
+            # and append our flag after it with a comma.
+            sed -i 's/    -fno-char8_t/    -fno-char8_t\n    $<$<CXX_COMPILER_ID:GNU>:-Wno-section-type-conflict>/' "$SDK_CMAKE_CORE"
             echo "Patched: -Wno-section-type-conflict added for GCC"
           fi
 
