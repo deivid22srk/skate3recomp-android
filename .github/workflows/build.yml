@@ -180,8 +180,9 @@ jobs:
           # Build only the rexglue tool (not the full skate3 target,
           # which would require generated/ that we're about to produce).
           cmake --build out/build/host-tools --target rexglue
-          # Verify the tool was produced
-          REXGLUE_BIN=$(find out/build/host-tools -type f -name rexglue -perm /u+x | head -n 1)
+          # Verify the tool was produced (CMake outputs binaries to
+          # third_party/rexglue-sdk/out/linux-amd64/, not the build dir)
+          REXGLUE_BIN=$(find . -type f -name rexglue -perm /u+x | head -n 1)
           if [ -z "$REXGLUE_BIN" ]; then
             echo "::error::rexglue host tool was not produced"
             exit 1
