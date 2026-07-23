@@ -149,16 +149,16 @@ jobs:
             echo "Patched: FFmpeg mathops.h \"ic\" -> \"Ic\" for GCC 14"
           fi
           # Patch 5: Fix GCC 14 section type conflict in ultrawide_debug.cpp.
-          # GCC 14 treats section type conflicts between thread_local and
-          # non-thread_local variables in the same TU as hard errors.
-          # -Wno-section-type-conflict does NOT exist in GCC 14 (it's a hard
-          # error, not a suppressible warning).  Fix: remove thread_local from
-          # g_current_draw_owner_target — safe for the single-threaded codegen
-          # host-tools build.  The Android build (Clang/NDK) is unaffected.
+          # GCC 14 treats section type conflicts between thread_local variables
+          # in .tdata vs .tbss within the same anonymous namespace as hard
+          # errors.  -Wno-section-type-conflict does NOT exist in GCC 14.
+          # Fix: remove ALL thread_local from this file — safe for the
+          # single-threaded codegen host-tools build.  The Android build
+          # (Clang/NDK) uses a fresh submodule checkout and is unaffected.
           ULTRAWIDE="third_party/rexglue-sdk/src/core/ultrawide_debug.cpp"
-          if grep -q 'thread_local uint32_t g_current_draw_owner_target' "$ULTRAWIDE"; then
-            sed -i 's/thread_local uint32_t g_current_draw_owner_target/uint32_t g_current_draw_owner_target/' "$ULTRAWIDE"
-            echo "Patched: removed thread_local from g_current_draw_owner_target (GCC 14 section conflict fix)"
+          if grep -q 'thread_local' "$ULTRAWIDE"; then
+            sed -i 's/thread_local //g' "$ULTRAWIDE"
+            echo "Patched: removed all thread_local from ultrawide_debug.cpp (GCC 14 section conflict fix)"
           fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
