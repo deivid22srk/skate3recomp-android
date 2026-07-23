@@ -160,6 +160,16 @@ jobs:
             sed -i 's/thread_local //g' "$ULTRAWIDE"
             echo "Patched: removed all thread_local from ultrawide_debug.cpp (GCC 14 section conflict fix)"
           fi
+          # Patch 6: Remove hard dependency of generate-skate3 on
+          # generate-eawebkit.  The workflow handles eawebkit codegen
+          # separately (step 8) with a proper file-existence guard.
+          # Without this, 'cmake --build --target generate-skate3' fails
+          # when EAWebkit.xex is absent.
+          CODEGEN_CMAKE="cmake/CodegenTargets.cmake"
+          if grep -q 'add_dependencies(generate-skate3 generate-eawebkit)' "$CODEGEN_CMAKE"; then
+            sed -i '/add_dependencies(generate-skate3 generate-eawebkit)/d' "$CODEGEN_CMAKE"
+            echo "Patched: removed generate-eawebkit dependency from generate-skate3"
+          fi
 
       - name: Build host tools (rexglue codegen, Linux x86_64)
         if: ${{ vars.GAME_FILES_REPO != '' && !hashFiles('generated/sources.cmake') }}
