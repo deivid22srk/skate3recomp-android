@@ -207,17 +207,16 @@ jobs:
             echo "::error::game/default.xex not found - cannot run codegen"
             exit 1
           fi
-          REXGLUE_BIN=$(find . -type f -name rexglue -perm /u+x | head -n 1)
-          echo "Using rexglue at: $REXGLUE_BIN"
-          echo "Manifest: out/build/host-tools/manifests/skate3.toml"
+          echo "=== Manifest content ==="
           cat out/build/host-tools/manifests/skate3.toml
-          echo "---"
-          "$REXGLUE_BIN" codegen out/build/host-tools/manifests/skate3.toml 2>&1 || {
-            echo "::error::rexglue codegen failed with exit code $?"
+          echo "=== Running codegen via cmake target ==="
+          cmake --build out/build/host-tools --target generate-skate3 --verbose 2>&1 | tee codegen_skate3.log
+          CODEGEN_EXIT=${PIPESTATUS[0]}
+          if [ $CODEGEN_EXIT -ne 0 ]; then
+            echo "::error::rexglue codegen failed with exit code $CODEGEN_EXIT"
+            echo "=== Last 50 lines of codegen log ==="
+            tail -50 codegen_skate3.log
             exit 1
-          }
-          if [ -f cmake/ApplySkate3CodegenPatches.cmake ]; then
-            cmake -DSKATE3_SOURCE_DIR="$GITHUB_WORKSPACE" -P cmake/ApplySkate3CodegenPatches.cmake
           fi
           if [ ! -f generated/sources.cmake ]; then
             echo "::error::codegen did not produce generated/sources.cmake"
